@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""ratbag-focus — per-app mouse profile switcher for any ratbagd-supported mouse."""
+import argparse, os, sys, subprocess, tomllib
+
+INSTALL_DIR = os.path.dirname(os.path.realpath(__file__))
+CONFIG_PATH = os.path.join(INSTALL_DIR, "config.toml")
+SRC_DIR     = os.path.join(INSTALL_DIR, "src")
+CACHE_FILE  = "/tmp/ratbag-focus-cache"
+SERVICE     = "ratbag-focus-modifier"
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        print(f"Config not found: {CONFIG_PATH}", file=sys.stderr)
+        print("Run install.sh or copy config.toml.example to config.toml.", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_status(args):
+    try:
+        with open(CACHE_FILE) as f:
+            current = f.read().strip()
+    except FileNotFoundError:
+        current = "(unknown — no switch has happened yet)"
+
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", SERVICE],
+        capture_output=True, text=True,
+    )
+    daemon_status = result.stdout.strip()
+
+    config = load_config()
+    dev    = config.get("device", {})
+    profiles = list(config.get("profile", {}).keys())
+    apps = config.get("apps", {})
+
+    print(f"Active profile : {current}")
+    print(f"Modifier daemon: {daemon_status}")
+    print(f"Device VID:PID : {dev.get('vendor', '?')}:{dev.get('product', '?')}")
+    print(f"Profiles       : {', '.join(profiles)}")
+    print(f"App mappings   : {len(apps)} rule(s)")
+
+
+def cmd_list(args):
+    config = load_config()
+
+    print("Profiles:")
+    for name, buttons in config.get("profile", {}).items():
+        print(f"  {name}:")
+        for btn, action in buttons.items():
+            print(f"    button {btn} -> {action}")
+
+    print()
+    print("App mappings:")
+    apps = config.get("apps", {})
+    if apps:
+        for pattern, profile in apps.items():
+            print(f"  {pattern!r} -> {profile}")
+    else:
+        print("  (none — all apps use 'default' profile)")
+
+    print()
+    print("Modifier shortcuts (hold DPI button + click):")
+    mod = config.get("modifier", {})
+    for key, val in mod.items():
+        if key != "button":
+            print(f"  {key} -> {val}")
+
+
+def cmd_apply(args):
+    apply_py = os.path.join(SRC_DIR, "apply.py")
+    result = subprocess.run([sys.executable, apply_py, args.profile])
+    if result.returncode == 0:
+        with open(CACHE_FILE, "w") as f:
+            f.write(args.profile)
+        print(f"Profile applied: {args.profile}")
+    else:
+        sys.exit(result.returncode)
+
+
+def cmd_reload(args):
+    print(f"Restarting {SERVICE}...")
+    subprocess.run(["systemctl", "--user", "restart", SERVICE])
+
+    try:
+        os.remove(CACHE_FILE)
+    except FileNotFoundError:
+        pass
+
+    print("Done. Profile will re-apply on next window focus change.")
+    print("Or run: ratbag-focus apply default")
+
+
+def cmd_detect(args):
+    if args.window:
+        try:
+            with open("/tmp/FocusNotifier/wclass.txt") as f:
+                wclass = f.read().strip()
+            print(f"Current window class: {wclass!r}")
+            print()
+            print("To add a profile for this app, add to config.toml:")
+            print(f'  [apps]')
+            print(f'  "*{wclass.lower()}*" = "myprofile"')
+            print()
+            print(f'  [profile.myprofile]')
+            print(f'  3 = "key:Backspace"')
+            print(f'  4 = "key:Ctrl+B"')
+            print(f'  5 = "button:6"')
+        except FileNotFoundError:
+            print("FocusNotifier is not running or no window has been focused yet.")
+        return
+
+    print("Ratbagd devices:")
+    result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        print("  No devices found. Is ratbagd running?")
+        print("  Try: sudo systemctl start ratbagd")
+    else:
+        devices = []
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith("/"):
+                name = line.rstrip(":")
+                devices.append(name)
+                print(f"  {name}")
+        print()
+        for name in devices:
+            print(f"  Button indices for '{name}':")
+            r = subprocess.run(
+                ["ratbagctl", name, "profile", "0", "button", "list"],
+                capture_output=True, text=True,
+            )
+            for bline in r.stdout.strip().splitlines():
+                print(f"    {bline.strip()}")
+            print()
+
+    print("USB devices (for VID:PID):")
+    result = subprocess.run(["lsusb"], capture_output=True, text=True)
+    for line in result.stdout.strip().splitlines():
+        print(f"  {line}")
+
+    print()
+    print("To use a device, set in config.toml:")
+    print("  [device]")
+    print('  vendor  = "046d"  # first 4 chars after "ID "')
+    print('  product = "4074"  # last 4 chars after ":"')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="ratbag-focus",
+        description="Per-app mouse profile switcher for any ratbagd-supported mouse.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("status", help="Show current profile and service status")
+    sub.add_parser("list",   help="List all profiles, app mappings, and shortcuts")
+    sub.add_parser("reload", help="Restart the modifier daemon and clear profile cache")
+
+    p_apply = sub.add_parser("apply", help="Apply a profile manually")
+    p_apply.add_argument("profile", help="Profile name from config.toml")
+
+    p_detect = sub.add_parser("detect", help="Detect device info or current window class")
+    p_detect.add_argument(
+        "--window", action="store_true",
+        help="Show the current window's class (for adding app mappings)",
+    )
+
+    args = parser.parse_args()
+    {
+        "status": cmd_status,
+        "list":   cmd_list,
+        "apply":  cmd_apply,
+        "reload": cmd_reload,
+        "detect": cmd_detect,
+    }[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

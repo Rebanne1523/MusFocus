@@ -1,0 +1,43 @@
+# ratbag-focus configuration example
+# Copy this file to config.toml and edit it for your setup.
+# Run `ratbag-focus detect` to find your device's IDs and button indices.
+
+[device]
+# Run `lsusb` and look for your mouse. "ID 046d:4074" → vendor="046d", product="4074"
+vendor  = "046d"
+product = "4074"
+
+[modifier]
+# ratbagd button index to use as modifier (held down to activate shortcuts).
+# Must also be remapped to "button:6" in your profiles so the daemon detects it.
+button = 5
+
+# evdev button name = keyboard shortcut to fire when modifier is held
+BTN_SIDE  = "Ctrl+C"
+BTN_EXTRA = "Ctrl+V"
+BTN_RIGHT = "Super+F"
+
+[apps]
+# window class pattern = profile name
+# Use * as wildcard, | for alternatives. Run `ratbag-focus detect --window` to inspect.
+"*resolve*|*davinci*" = "davinci"
+# "*blender*" = "blender"
+# "*code*|*cursor*" = "coding"
+
+[profile.default]
+# button index = action
+# "button:N"     → send mouse button event (4=back, 5=forward, 6=BTN_FORWARD)
+# "key:Shortcut" → send keyboard macro
+3 = "button:5"
+4 = "button:4"
+5 = "button:6"
+
+[profile.davinci]
+3 = "key:Backspace"
+4 = "key:Ctrl+B"
+5 = "button:6"
+
+# [profile.blender]
+# 3 = "key:Escape"
+# 4 = "key:Space"
+# 5 = "button:6"
