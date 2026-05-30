@@ -6,7 +6,7 @@ Also adds a **modifier layer**: hold one button (like the DPI button) to turn ot
 
 ## Features
 
-- Per-app button remapping and macros (switches automatically when you change windows)
+- Per-app button remapping, macros, and DPI (switches automatically when you change windows)
 - Modifier layer: hold one button to unlock a second set of actions on other buttons
 - Works with any ratbagd-supported mouse (Logitech, Razer, SteelSeries, Roccat, etc.)
 - Near-instant switching (~30ms) with background hardware write
@@ -17,12 +17,21 @@ Also adds a **modifier layer**: hold one button (like the DPI button) to turn ot
 - Linux with KDE Plasma (Wayland or X11)
 - [ratbagd](https://github.com/libratbag/libratbag) — `sudo systemctl enable --now ratbagd`
 - [FocusNotifier](https://github.com/Rolv-Apneseth/focus-notifier) — KWin script that fires on window changes
-- Python 3.11+
-- `python-dbus` and `python-evdev`
+- Python 3.11+ with `python-dbus`, `python-evdev`, `python-gobject`
 
 On Arch/CachyOS:
 ```bash
-sudo pacman -S python-dbus python-evdev ratbagd
+sudo pacman -S python-dbus python-evdev python-gobject ratbagd
+```
+
+On Ubuntu/Debian:
+```bash
+sudo apt install python3-dbus python3-evdev python3-gi ratbagd
+```
+
+On Fedora:
+```bash
+sudo dnf install python3-dbus python3-evdev python3-gobject ratbagd
 ```
 
 [Piper](https://github.com/libratbag/piper) is optional but useful to visually inspect your mouse's button layout and verify that profiles are applying correctly.
@@ -67,10 +76,11 @@ musfocus config
 musfocus detect
 ```
 
-Look at the **Input device VID:PIDs** section (not lsusb — wireless mice show the receiver's ID there, not the mouse's). Example:
+Look at the **Input device VID:PIDs** section (not lsusb — for wireless mice, lsusb shows the receiver's ID, not the mouse's). Example:
 ```
 046d:4074  Logitech G305
 ```
+
 Put those values in config.toml:
 ```toml
 [device]
@@ -80,33 +90,37 @@ product = "4074"
 
 ### Step 2 — Find button indices
 
-The same `detect` command also prints the button indices ratbagd uses for your mouse:
+The same `detect` command prints the button indices ratbagd uses for your mouse, along with the evdev name for each:
 ```
-Button 0: action = button 1   <- left click
-Button 1: action = button 2   <- right click
-Button 3: action = button 5   <- back side button
-Button 4: action = button 4   <- forward side button
-Button 5: action = button 6   <- DPI button
+[0]  evdev: BTN_LEFT        (left click)
+[1]  evdev: BTN_RIGHT       (right click)
+[2]  evdev: BTN_MIDDLE      (middle)
+[3]  evdev: BTN_EXTRA       (forward (extra))
+[4]  evdev: BTN_SIDE        (back (side))
+[5]  evdev: BTN_FORWARD     (modifier trigger)
 ```
-The number at the start of each line (0, 1, 3, 4, 5...) is the index you use in profiles.
+
+The number in brackets (0, 1, 3, 4, 5...) is the **button index** you use in profiles. The evdev name is what you use in the `[modifier]` section.
 
 ### Step 3 — Add app profiles
 
-Focus the app you want a custom layout for, then:
+Focus the app you want a custom layout for, then run:
 ```bash
 musfocus detect --window
 ```
-This shows the window class name, for example `resolve`. Use it in config.toml:
+
+This shows the window class name, for example `resolve`. Use it in `config.toml`:
 ```toml
 [apps]
 "*resolve*" = "davinci"
 ```
+
 Use `*` as wildcard. Separate multiple patterns with `|`:
 ```toml
 "*resolve*|*davinci*" = "davinci"
 ```
 
-The window class is usually the app's executable name in lowercase. If you're unsure, run `musfocus detect --window` while the app is focused and use whatever it shows.
+The window class is usually the app's executable name in lowercase. Run `musfocus detect --window` while the app is focused to get the exact value.
 
 ### Understanding profile actions
 
@@ -114,10 +128,13 @@ Each line in a profile maps a button index to an action:
 
 ```toml
 [profile.davinci]
+dpi = 800
 3 = "key:Backspace"    # button 3 fires Backspace
 4 = "key:Ctrl+B"       # button 4 fires Ctrl+B
 5 = "button:6"         # button 5 stays available for the modifier layer
 ```
+
+**`dpi = N`** — sets the active DPI when this profile activates. Run `musfocus detect` to see the allowed DPI values for your mouse.
 
 **`key:Shortcut`** — fires a keyboard shortcut:
 - `"key:Backspace"`
@@ -133,24 +150,24 @@ Each line in a profile maps a button index to an action:
 
 ### The modifier layer
 
-Think of it like a second layer on your mouse, activated by holding one button. While you hold the modifier button, other buttons fire keyboard shortcuts instead of their normal actions. Release it and everything goes back to normal.
+Think of it like a second layer on your mouse, activated by holding one button. While you hold the modifier button, other buttons fire keyboard shortcuts instead of their normal actions. Release it and everything goes back to normal — similar to how Shift works on a keyboard.
 
 ```toml
 [modifier]
-button    = 5          # the button INDEX you hold to activate the layer
-BTN_SIDE  = "Ctrl+C"  # while holding: side button fires Ctrl+C
-BTN_EXTRA = "Ctrl+V"  # while holding: extra button fires Ctrl+V
-BTN_RIGHT = "Super+F" # while holding: right click fires Super+F
+button    = 5           # button INDEX to hold to activate the layer
+BTN_SIDE  = "Ctrl+C"   # while holding: side button fires Ctrl+C
+BTN_EXTRA = "Ctrl+V"   # while holding: extra button fires Ctrl+V
+BTN_RIGHT = "Super+F"  # while holding: right click fires Super+F
 ```
 
-**One required step:** the modifier button must be set to `"button:6"` in every profile. This is what makes the button's press visible to the background service — without this remapping, some mice handle the button entirely in firmware and the OS never receives the event.
+`button = 5` is the index of the button you hold. The names (`BTN_SIDE`, `BTN_EXTRA`, `BTN_RIGHT`) are the evdev names shown by `musfocus detect`.
+
+**One required step:** the modifier button must be set to `"button:6"` in every profile. This makes the button's press visible to the background service — without this, some mice handle the button entirely in firmware and the OS never receives the event.
 
 So if your modifier button has index 5, every profile needs this line:
 ```toml
 5 = "button:6"
 ```
-
-The button names (`BTN_SIDE`, `BTN_EXTRA`, `BTN_RIGHT`) are Linux kernel names. Run `musfocus detect` to see which physical buttons map to which names.
 
 ### Full example
 
@@ -169,11 +186,13 @@ BTN_RIGHT = "Super+F"
 "*resolve*|*davinci*" = "davinci"
 
 [profile.default]
+dpi = 1600
 3 = "button:5"      # physical back button -> forward
 4 = "button:4"      # physical forward button -> back
 5 = "button:6"      # modifier button (required in every profile)
 
 [profile.davinci]
+dpi = 800
 3 = "key:Backspace"
 4 = "key:Ctrl+B"
 5 = "button:6"
@@ -181,7 +200,7 @@ BTN_RIGHT = "Super+F"
 
 ## How It Works
 
-**Profile switching** — FocusNotifier notifies MusFocus whenever you switch windows. It matches the window class against the `[apps]` patterns and calls the ratbagd DBus API to rewrite button mappings in a single session. A cache file prevents redundant writes (and mouse drag interruptions).
+**Profile switching** — FocusNotifier notifies MusFocus whenever you switch windows. It matches the window class against the `[apps]` patterns and calls the ratbagd DBus API to rewrite button mappings and DPI in a single session. A cache file prevents redundant writes (and mouse drag interruptions).
 
 **Modifier daemon** — A background service (`src/daemon.py`) grabs your mouse and creates a virtual copy with the same hardware ID, so KDE's pointer acceleration settings still apply. It intercepts events in real time: when the modifier button is held, configured buttons fire keyboard shortcuts; everything else passes through unchanged.
 

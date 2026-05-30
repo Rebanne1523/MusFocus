@@ -25,19 +25,22 @@ BTN_RIGHT = "Super+F"
 # "*code*|*cursor*" = "coding"
 
 [profile.default]
-# button index = action
+# dpi = N        → set DPI when this profile activates (optional)
 # "button:N"     → send mouse button event (4=back, 5=forward, 6=BTN_FORWARD)
 # "key:Shortcut" → send keyboard macro
+dpi = 1600
 3 = "button:5"
 4 = "button:4"
 5 = "button:6"
 
 [profile.davinci]
+dpi = 800
 3 = "key:Backspace"
 4 = "key:Ctrl+B"
 5 = "button:6"
 
 # [profile.blender]
+# dpi = 1200
 # 3 = "key:Escape"
 # 4 = "key:Space"
 # 5 = "button:6"

@@ -12,8 +12,9 @@ echo
 
 # 0. Check Python dependencies
 MISSING=""
-python3 -c "import dbus" 2>/dev/null || MISSING="$MISSING python-dbus"
-python3 -c "import evdev" 2>/dev/null || MISSING="$MISSING python-evdev"
+python3 -c "import dbus"              2>/dev/null || MISSING="$MISSING python-dbus"
+python3 -c "import evdev"             2>/dev/null || MISSING="$MISSING python-evdev"
+python3 -c "from gi.repository import Gio" 2>/dev/null || MISSING="$MISSING python-gobject"
 if [ -n "$MISSING" ]; then
     echo "[!] Missing Python packages:$MISSING"
     if command -v pacman &>/dev/null; then

@@ -83,6 +83,33 @@ def macro_mapping(keys):
     )
 
 
+def set_dpi(bus, hidraw, dpi):
+    # ratbagd's Resolution property has DBus type 'v' (variant), so we need
+    # to send v{v{u}} — the Properties.Set 'v' slot contains our value of type 'v'.
+    from gi.repository import Gio, GLib
+    conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    profile_obj = bus.get_object(
+        "org.freedesktop.ratbag1",
+        f"/org/freedesktop/ratbag1/profile/{hidraw}/p0",
+    )
+    profile_props = dbus.Interface(profile_obj, "org.freedesktop.DBus.Properties")
+    resolutions = profile_props.Get("org.freedesktop.ratbag1.Profile", "Resolutions")
+    for res_path in resolutions:
+        res_obj = bus.get_object("org.freedesktop.ratbag1", str(res_path))
+        res_props = dbus.Interface(res_obj, "org.freedesktop.DBus.Properties")
+        if res_props.Get("org.freedesktop.ratbag1.Resolution", "IsActive"):
+            conn.call_sync(
+                "org.freedesktop.ratbag1", str(res_path),
+                "org.freedesktop.DBus.Properties", "Set",
+                GLib.Variant("(ssv)", (
+                    "org.freedesktop.ratbag1.Resolution", "Resolution",
+                    GLib.Variant("v", GLib.Variant("u", dpi)),
+                )),
+                None, Gio.DBusCallFlags.NONE, -1, None,
+            )
+            return
+
+
 def apply_profile(name, config):
     profiles = config.get("profile", {})
     profile = profiles.get(name)
@@ -104,6 +131,8 @@ def apply_profile(name, config):
     hidraw = str(devices[0]).split("/")[-1]
 
     for btn_idx_str, action_str in profile.items():
+        if btn_idx_str == "dpi":
+            continue
         btn_idx = int(btn_idx_str)
         kind, data = parse_action(action_str)
         obj = bus.get_object(
@@ -113,6 +142,9 @@ def apply_profile(name, config):
         props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
         mapping = button_mapping(data) if kind == "button" else macro_mapping(data)
         props.Set("org.freedesktop.ratbag1.Button", "Mapping", mapping)
+
+    if "dpi" in profile:
+        set_dpi(bus, hidraw, int(profile["dpi"]))
 
     dev_path = f"/org/freedesktop/ratbag1/device/{hidraw}"
     commit_cmd = (

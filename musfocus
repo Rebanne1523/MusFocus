@@ -140,6 +140,19 @@ def cmd_detect(args):
                 devices.append(name)
                 print(f"  {name}")
         print()
+        # Maps ratbagd "button N" action → evdev BTN_* name used in [modifier] config
+        BTN_NAME = {
+            1: "BTN_LEFT",   2: "BTN_RIGHT",   3: "BTN_MIDDLE",
+            4: "BTN_SIDE",   5: "BTN_EXTRA",   6: "BTN_FORWARD",
+            7: "BTN_BACK",   8: "BTN_TASK",
+        }
+        BTN_LABEL = {
+            "BTN_LEFT": "left click",    "BTN_RIGHT": "right click",
+            "BTN_MIDDLE": "middle",      "BTN_SIDE": "back (side)",
+            "BTN_EXTRA": "forward (extra)", "BTN_FORWARD": "modifier trigger",
+            "BTN_BACK": "back",
+        }
+
         for name in devices:
             print(f"  Button indices for '{name}':")
             count_r = subprocess.run(
@@ -158,8 +171,20 @@ def cmd_detect(args):
                     capture_output=True, text=True,
                 )
                 line = br.stdout.strip()
-                if line:
-                    print(f"    [{i}] {line}")
+                if not line:
+                    continue
+                # Parse "Button: N is mapped to 'button M'" → extract M
+                import re as _re
+                m = _re.search(r"'button (\d+)'", line)
+                if m:
+                    btn_num = int(m.group(1))
+                    evdev_name = BTN_NAME.get(btn_num, f"button {btn_num}")
+                    label = BTN_LABEL.get(evdev_name, "")
+                    print(f"    [{i}]  evdev: {evdev_name:<14}  ({label})")
+                else:
+                    # macro or special action
+                    action = line.split("'")[-2] if "'" in line else line
+                    print(f"    [{i}]  {action}")
             print()
 
     # evdev listing — the correct VID:PID source, especially for wireless mice
