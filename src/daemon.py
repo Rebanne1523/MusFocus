@@ -101,8 +101,11 @@ def run():
         all_extra_keys.update(keys)
 
     raw_caps = device.capabilities()
-    # Filter EV_KEY to BTN_* range only — HIDPP firmware exports invalid key codes
-    btn_codes = [c for c in raw_caps.get(e.EV_KEY, []) if 0x100 <= c <= 0x17F]
+    # Include standard keyboard keys (1-127) and mouse buttons (0x100-0x17F).
+    # HIDPP firmware exports codes outside these ranges that cause uinput errors.
+    # Keyboard range is required so hardware macros set by ratbagd can pass through.
+    VALID_KEY_CODES = set(range(1, 128)) | set(range(0x100, 0x180))
+    btn_codes = [c for c in raw_caps.get(e.EV_KEY, []) if c in VALID_KEY_CODES]
     for k in all_extra_keys:
         if k not in btn_codes:
             btn_codes.append(k)

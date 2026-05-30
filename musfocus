@@ -180,9 +180,9 @@ def cmd_detect(args):
                     btn_num = int(m.group(1))
                     evdev_name = BTN_NAME.get(btn_num, f"button {btn_num}")
                     label = BTN_LABEL.get(evdev_name, "")
-                    print(f"    [{i}]  evdev: {evdev_name:<14}  ({label})")
+                    print(f"    [{i}]  button:{btn_num:<2}  →  {evdev_name:<14}  ({label})")
                 else:
-                    # macro or special action
+                    # macro or special action — show raw action
                     action = line.split("'")[-2] if "'" in line else line
                     print(f"    [{i}]  {action}")
             print()
