@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""ratbag-focus — per-app mouse profile switcher for any ratbagd-supported mouse."""
+"""musfocus — per-app mouse profile switcher for any ratbagd-supported mouse."""
 import argparse, os, sys, subprocess, tomllib
 
 INSTALL_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.toml")
 SRC_DIR     = os.path.join(INSTALL_DIR, "src")
-CACHE_FILE  = "/tmp/ratbag-focus-cache"
-SERVICE     = "ratbag-focus-modifier"
+CACHE_FILE  = "/tmp/musfocus-cache"
+SERVICE     = "musfocus-modifier"
 
 
 def load_config():
@@ -81,6 +81,15 @@ def cmd_apply(args):
         sys.exit(result.returncode)
 
 
+def cmd_config(args):
+    editor = (
+        os.environ.get("EDITOR")
+        or os.environ.get("VISUAL")
+        or "nano"
+    )
+    os.execvp(editor, [editor, CONFIG_PATH])
+
+
 def cmd_reload(args):
     print(f"Restarting {SERVICE}...")
     subprocess.run(["systemctl", "--user", "restart", SERVICE])
@@ -91,7 +100,7 @@ def cmd_reload(args):
         pass
 
     print("Done. Profile will re-apply on next window focus change.")
-    print("Or run: ratbag-focus apply default")
+    print("Or run: musfocus apply default")
 
 
 def cmd_detect(args):
@@ -113,7 +122,8 @@ def cmd_detect(args):
             print("FocusNotifier is not running or no window has been focused yet.")
         return
 
-    print("Ratbagd devices:")
+    # ratbagd devices + button indices
+    print("Ratbagd-supported devices:")
     result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         print("  No devices found. Is ratbagd running?")
@@ -122,42 +132,79 @@ def cmd_detect(args):
         devices = []
         for line in result.stdout.strip().splitlines():
             line = line.strip()
-            if line and not line.startswith("/"):
-                name = line.rstrip(":")
+            if not line:
+                continue
+            # "bellowing-paca:      Logitech G305" → "Logitech G305"
+            name = line.split(":", 1)[1].strip() if ":" in line else line
+            if name:
                 devices.append(name)
                 print(f"  {name}")
         print()
         for name in devices:
             print(f"  Button indices for '{name}':")
-            r = subprocess.run(
-                ["ratbagctl", name, "profile", "0", "button", "list"],
+            count_r = subprocess.run(
+                ["ratbagctl", name, "profile", "0", "button", "count"],
                 capture_output=True, text=True,
             )
-            for bline in r.stdout.strip().splitlines():
-                print(f"    {bline.strip()}")
+            try:
+                count = int(count_r.stdout.strip())
+            except ValueError:
+                print("    (could not read button count)")
+                print()
+                continue
+            for i in range(count):
+                br = subprocess.run(
+                    ["ratbagctl", name, "profile", "0", "button", str(i), "action", "get"],
+                    capture_output=True, text=True,
+                )
+                line = br.stdout.strip()
+                if line:
+                    print(f"    [{i}] {line}")
             print()
 
-    print("USB devices (for VID:PID):")
-    result = subprocess.run(["lsusb"], capture_output=True, text=True)
-    for line in result.stdout.strip().splitlines():
-        print(f"  {line}")
+    # evdev listing — the correct VID:PID source, especially for wireless mice
+    print("Input device VID:PIDs (use these in config.toml, not lsusb for wireless mice):")
+    try:
+        import evdev as _evdev
+        seen = set()
+        for path in _evdev.list_devices():
+            try:
+                d = _evdev.InputDevice(path)
+                if d.info.vendor and d.info.product:
+                    key = (d.info.vendor, d.info.product)
+                    if key not in seen:
+                        seen.add(key)
+                        vid = format(d.info.vendor, "04x")
+                        pid = format(d.info.product, "04x")
+                        print(f"  {vid}:{pid}  {d.name}")
+                d.close()
+            except Exception:
+                pass
+        if not seen:
+            print("  (no input devices found)")
+    except ImportError:
+        print("  (python-evdev not installed, falling back to lsusb)")
+        result = subprocess.run(["lsusb"], capture_output=True, text=True)
+        for line in result.stdout.strip().splitlines():
+            print(f"  {line}")
 
     print()
-    print("To use a device, set in config.toml:")
+    print("Set in config.toml:")
     print("  [device]")
-    print('  vendor  = "046d"  # first 4 chars after "ID "')
-    print('  product = "4074"  # last 4 chars after ":"')
+    print('  vendor  = "046d"')
+    print('  product = "4074"')
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="ratbag-focus",
+        prog="musfocus",
         description="Per-app mouse profile switcher for any ratbagd-supported mouse.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Show current profile and service status")
     sub.add_parser("list",   help="List all profiles, app mappings, and shortcuts")
+    sub.add_parser("config", help="Open config.toml in your editor ($EDITOR or nano)")
     sub.add_parser("reload", help="Restart the modifier daemon and clear profile cache")
 
     p_apply = sub.add_parser("apply", help="Apply a profile manually")
@@ -173,6 +220,7 @@ def main():
     {
         "status": cmd_status,
         "list":   cmd_list,
+        "config": cmd_config,
         "apply":  cmd_apply,
         "reload": cmd_reload,
         "detect": cmd_detect,

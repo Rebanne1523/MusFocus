@@ -1,6 +1,6 @@
-# ratbag-focus configuration example
+# musfocus configuration example
 # Copy this file to config.toml and edit it for your setup.
-# Run `ratbag-focus detect` to find your device's IDs and button indices.
+# Run `musfocus detect` to find your device's IDs and button indices.
 
 [device]
 # Run `lsusb` and look for your mouse. "ID 046d:4074" → vendor="046d", product="4074"
@@ -19,7 +19,7 @@ BTN_RIGHT = "Super+F"
 
 [apps]
 # window class pattern = profile name
-# Use * as wildcard, | for alternatives. Run `ratbag-focus detect --window` to inspect.
+# Use * as wildcard, | for alternatives. Run `musfocus detect --window` to inspect.
 "*resolve*|*davinci*" = "davinci"
 # "*blender*" = "blender"
 # "*code*|*cursor*" = "coding"

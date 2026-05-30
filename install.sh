@@ -5,42 +5,68 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 LISTENERS_FILE="$HOME/.config/FocusNotifier/listeners.txt"
-LISTENER_SHIM="$HOME/.config/ratbag-focus-listener.sh"
+LISTENER_SHIM="$HOME/.config/musfocus-listener.sh"
 
-echo "=== ratbag-focus installer ==="
+echo "=== musfocus installer ==="
 echo
+
+# 0. Check Python dependencies
+MISSING=""
+python3 -c "import dbus" 2>/dev/null || MISSING="$MISSING python-dbus"
+python3 -c "import evdev" 2>/dev/null || MISSING="$MISSING python-evdev"
+if [ -n "$MISSING" ]; then
+    echo "[!] Missing Python packages:$MISSING"
+    if command -v pacman &>/dev/null; then
+        echo "    Run: sudo pacman -S$MISSING"
+    elif command -v apt-get &>/dev/null; then
+        echo "    Run: sudo apt-get install$(echo "$MISSING" | sed 's/python-/python3-/g')"
+    elif command -v dnf &>/dev/null; then
+        echo "    Run: sudo dnf install$(echo "$MISSING" | sed 's/python-/python3-/g')"
+    else
+        echo "    Install via your package manager, then re-run install.sh."
+    fi
+    exit 1
+fi
 
 # 1. Config
 if [ ! -f "$SCRIPT_DIR/config.toml" ]; then
     cp "$SCRIPT_DIR/config.toml.example" "$SCRIPT_DIR/config.toml"
     echo "[!] Created config.toml from example."
-    echo "    Edit $SCRIPT_DIR/config.toml before using ratbag-focus."
-    echo "    Run 'ratbag-focus detect' to find your device's VID:PID and button indices."
+    echo "    Edit $SCRIPT_DIR/config.toml before using musfocus."
+    echo "    Run 'musfocus detect' to find your device's VID:PID and button indices."
     echo
 fi
 
 # 2. Make scripts executable
-chmod +x "$SCRIPT_DIR/ratbag-focus"
+chmod +x "$SCRIPT_DIR/musfocus"
 chmod +x "$SCRIPT_DIR/src/apply.py"
 chmod +x "$SCRIPT_DIR/src/switcher.py"
 chmod +x "$SCRIPT_DIR/src/daemon.py"
 
 # 3. Symlink CLI to ~/.local/bin
 mkdir -p "$BIN_DIR"
-ln -sf "$SCRIPT_DIR/ratbag-focus" "$BIN_DIR/ratbag-focus"
-echo "[+] CLI linked: ratbag-focus -> $BIN_DIR/ratbag-focus"
+ln -sf "$SCRIPT_DIR/musfocus" "$BIN_DIR/musfocus"
+echo "[+] CLI linked: musfocus -> $BIN_DIR/musfocus"
 
-# 4. Migrate old mouse-modifier service if present
-if systemctl --user is-active mouse-modifier &>/dev/null; then
-    echo "[~] Stopping old mouse-modifier service..."
-    systemctl --user disable --now mouse-modifier.service 2>/dev/null || true
-fi
+# 4. Migrate from previous versions
+for OLD_SVC in mouse-modifier musfocus-modifier ratbag-focus-modifier; do
+    if systemctl --user is-active "$OLD_SVC" &>/dev/null || \
+       systemctl --user is-enabled "$OLD_SVC" &>/dev/null 2>&1; then
+        echo "[~] Stopping old service: $OLD_SVC"
+        systemctl --user disable --now "$OLD_SVC.service" 2>/dev/null || true
+    fi
+done
+for OLD_BIN in ratbag-focus; do
+    rm -f "$BIN_DIR/$OLD_BIN"
+done
+OLD_RATBAG_LISTENER="$HOME/.config/musfocus-listener.sh"
+# (listener shim path hasn't changed, skip)
 
 # 5. Install systemd service
 mkdir -p "$SYSTEMD_DIR"
-cat > "$SYSTEMD_DIR/ratbag-focus-modifier.service" << EOF
+cat > "$SYSTEMD_DIR/musfocus-modifier.service" << EOF
 [Unit]
-Description=ratbag-focus modifier daemon
+Description=musfocus modifier daemon
 After=ratbagd.service
 
 [Service]
@@ -51,17 +77,21 @@ RestartSec=3
 [Install]
 WantedBy=default.target
 EOF
-echo "[+] Systemd service installed: ratbag-focus-modifier.service"
+echo "[+] Systemd service installed: musfocus-modifier.service"
 
 # 6. FocusNotifier listener
 if [ -d "$(dirname "$LISTENERS_FILE")" ]; then
-    # Remove old listener if present
-    OLD_LISTENER="$HOME/.config/mouse-profile-switcher.sh"
-    if [ -f "$LISTENERS_FILE" ] && grep -qF "$OLD_LISTENER" "$LISTENERS_FILE"; then
-        echo "[~] Removing old FocusNotifier listener..."
-        grep -vF "$OLD_LISTENER" "$LISTENERS_FILE" > /tmp/.rfocus-listeners.tmp || true
-        mv /tmp/.rfocus-listeners.tmp "$LISTENERS_FILE"
-    fi
+    # Remove old listeners from previous versions
+    for OLD_L in \
+        "$HOME/.config/mouse-profile-switcher.sh" \
+        "$HOME/.config/ratbag-focus-listener.sh"; do
+        if [ -f "$LISTENERS_FILE" ] && grep -qF "$OLD_L" "$LISTENERS_FILE" 2>/dev/null; then
+            echo "[~] Removing old listener: $(basename "$OLD_L")"
+            grep -vF "$OLD_L" "$LISTENERS_FILE" > /tmp/.mf-listeners.tmp || true
+            mv /tmp/.mf-listeners.tmp "$LISTENERS_FILE"
+        fi
+        rm -f "$OLD_L"
+    done
 
     # Install shim (FocusNotifier requires a bash script)
     cat > "$LISTENER_SHIM" << EOF2
@@ -93,10 +123,10 @@ fi
 
 # 8. Enable and start service
 systemctl --user daemon-reload
-systemctl --user enable --now ratbag-focus-modifier.service
+systemctl --user enable --now musfocus-modifier.service
 echo "[+] Modifier daemon enabled and running"
 
 echo
 echo "=== Done ==="
 echo "  Edit $SCRIPT_DIR/config.toml to add profiles and app mappings."
-echo "  Run 'ratbag-focus --help' for available commands."
+echo "  Run 'musfocus --help' for available commands."

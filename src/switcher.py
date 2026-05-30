@@ -5,8 +5,8 @@ import sys, os, fcntl, fnmatch, subprocess, tomllib
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_DIR, "config.toml")
 APPLY_PY    = os.path.join(PROJECT_DIR, "src", "apply.py")
-CACHE_FILE  = "/tmp/ratbag-focus-cache"
-LOCK_FILE   = "/tmp/ratbag-focus.lock"
+CACHE_FILE  = "/tmp/musfocus-cache"
+LOCK_FILE   = "/tmp/musfocus.lock"
 WCLASS_FILE = "/tmp/FocusNotifier/wclass.txt"
 
 
