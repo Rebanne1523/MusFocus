@@ -2,3 +2,5 @@ config.toml
 __pycache__/
 *.pyc
 *.pyo
+.kate-swp
+*.kate-swp
