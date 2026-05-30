@@ -2,7 +2,9 @@
 
 Automatically switches your mouse button layout based on which app is active, for any mouse supported by [ratbagd/piper](https://github.com/libratbag/libratbag).
 
-Also adds a **modifier layer**: hold one button (like the DPI button) to turn other buttons into keyboard shortcuts — similar to how holding Shift gives you capital letters, but for your mouse.
+Also adds a **modifier layer**: hold one button (like the DPI button) to turn other buttons into keyboard shortcuts — similar to how holding Shift gives you capital letters, but for your mouse. 
+
+This application is tailored to help users who want extra features on their mice, or they are looking for a solution for mice that only support 1 on board profile. Saving new profiles in the system rather than the mouse memory.
 
 ## Features
 
