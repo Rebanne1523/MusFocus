@@ -39,7 +39,7 @@ sudo dnf install python3-dbus python3-evdev python3-gobject ratbagd
 ## Installation
 
 ```bash
-git clone https://github.com/yourname/musfocus
+git clone https://github.com/Rebanne1523/MusFocus.git
 cd musfocus
 bash install.sh
 ```
