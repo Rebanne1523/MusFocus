@@ -8,13 +8,32 @@ SRC_DIR     = os.path.join(INSTALL_DIR, "src")
 CACHE_FILE  = "/tmp/musfocus-cache"
 SERVICE     = "musfocus-modifier"
 
+# ── Color palette (orange/black, dark+light compatible) ──────────────────────
+_TTY = sys.stdout.isatty()
+def _c(code): return code if _TTY else ""
+
+OR  = _c("\033[38;5;208m")   # orange  — primary accent
+OR2 = _c("\033[38;5;172m")   # amber   — secondary / dimmer orange
+BD  = _c("\033[1m")           # bold
+DM  = _c("\033[2m")           # dim
+GR  = _c("\033[32m")          # green   — success / active
+RD  = _c("\033[31m")          # red     — error / inactive
+YL  = _c("\033[1;33m")        # yellow  — warnings / countdown
+RS  = _c("\033[0m")           # reset
+
+
+def _header(title):
+    """Bold orange section header with a subtle underline."""
+    print(f"\n{OR}{BD}{title}{RS}")
+    print(f"{DM}{'─' * (len(title) + 2)}{RS}")
+
 
 def load_config():
     try:
         with open(CONFIG_PATH, "rb") as f:
             return tomllib.load(f)
     except FileNotFoundError:
-        print(f"Config not found: {CONFIG_PATH}", file=sys.stderr)
+        print(f"{RD}Config not found:{RS} {CONFIG_PATH}", file=sys.stderr)
         print("Run install.sh or copy config.toml.example to config.toml.", file=sys.stderr)
         sys.exit(1)
 
@@ -24,50 +43,52 @@ def cmd_status(args):
         with open(CACHE_FILE) as f:
             current = f.read().strip()
     except FileNotFoundError:
-        current = "(unknown — no switch has happened yet)"
+        current = f"{DM}unknown — no switch yet{RS}"
 
     result = subprocess.run(
         ["systemctl", "--user", "is-active", SERVICE],
         capture_output=True, text=True,
     )
     daemon_status = result.stdout.strip()
+    daemon_color  = GR if daemon_status == "active" else RD
 
-    config = load_config()
-    dev    = config.get("device", {})
+    config   = load_config()
+    dev      = config.get("device", {})
     profiles = list(config.get("profile", {}).keys())
-    apps = config.get("apps", {})
+    apps     = config.get("apps", {})
 
-    print(f"Active profile : {current}")
-    print(f"Modifier daemon: {daemon_status}")
-    print(f"Device VID:PID : {dev.get('vendor', '?')}:{dev.get('product', '?')}")
-    print(f"Profiles       : {', '.join(profiles)}")
-    print(f"App mappings   : {len(apps)} rule(s)")
+    _header("musfocus status")
+    print(f"  {DM}Active profile {RS}  {OR}{BD}{current}{RS}")
+    print(f"  {DM}Modifier daemon{RS}  {daemon_color}{BD}{daemon_status}{RS}")
+    print(f"  {DM}Device         {RS}  {OR}{dev.get('vendor','?')}:{dev.get('product','?')}{RS}")
+    print(f"  {DM}Profiles       {RS}  {', '.join(f'{OR}{p}{RS}' for p in profiles)}")
+    print(f"  {DM}App mappings   {RS}  {len(apps)} rule(s)")
+    print()
 
 
 def cmd_list(args):
     config = load_config()
 
-    print("Profiles:")
+    _header("Profiles")
     for name, buttons in config.get("profile", {}).items():
-        print(f"  {name}:")
+        print(f"  {OR}{BD}{name}{RS}")
         for btn, action in buttons.items():
-            print(f"    button {btn} -> {action}")
+            print(f"    {DM}button {btn}{RS}  {DM}→{RS}  {action}")
 
-    print()
-    print("App mappings:")
+    _header("App mappings")
     apps = config.get("apps", {})
     if apps:
         for pattern, profile in apps.items():
-            print(f"  {pattern!r} -> {profile}")
+            print(f"  {DM}{pattern!r}{RS}  {DM}→{RS}  {OR}{profile}{RS}")
     else:
-        print("  (none — all apps use 'default' profile)")
+        print(f"  {DM}(none — all apps use 'default' profile){RS}")
 
-    print()
-    print("Modifier shortcuts (hold DPI button + click):")
+    _header(f"Modifier layer  {DM}hold DPI button + click{RS}")
     mod = config.get("modifier", {})
     for key, val in mod.items():
         if key != "button":
-            print(f"  {key} -> {val}")
+            print(f"  {BD}{key:<12}{RS}  {DM}→{RS}  {OR}{val}{RS}")
+    print()
 
 
 def cmd_apply(args):
@@ -76,7 +97,7 @@ def cmd_apply(args):
     if result.returncode == 0:
         with open(CACHE_FILE, "w") as f:
             f.write(args.profile)
-        print(f"Profile applied: {args.profile}")
+        print(f"{GR}✓{RS} Profile applied: {OR}{BD}{args.profile}{RS}")
     else:
         sys.exit(result.returncode)
 
@@ -91,7 +112,7 @@ def cmd_config(args):
 
 
 def cmd_reload(args):
-    print(f"Restarting {SERVICE}...")
+    print(f"{OR}Restarting {SERVICE}...{RS}")
     subprocess.run(["systemctl", "--user", "restart", SERVICE])
 
     try:
@@ -99,62 +120,70 @@ def cmd_reload(args):
     except FileNotFoundError:
         pass
 
-    print("Done. Profile will re-apply on next window focus change.")
-    print("Or run: musfocus apply default")
+    print(f"{GR}✓{RS} Done. Profile will re-apply on next window focus change.")
+    print(f"  Or run: {OR}musfocus apply default{RS}")
 
 
 def cmd_detect(args):
     if args.window:
+        import time
+        print(f"{YL}{BD}Switch to (or hover over) your target window now...{RS}")
+        for i in range(5, 0, -1):
+            print(f"{YL}  Reading in {BD}{i}s{RS}{YL}...{RS}", end="\r", flush=True)
+            time.sleep(1)
+        print(" " * 40, end="\r", flush=True)
         try:
             with open("/tmp/FocusNotifier/wclass.txt") as f:
                 wclass = f.read().strip()
-            print(f"Current window class: {wclass!r}")
+            print(f"  Window class  {OR}{BD}{wclass}{RS}")
             print()
-            print("To add a profile for this app, add to config.toml:")
-            print(f'  [apps]')
-            print(f'  "*{wclass.lower()}*" = "myprofile"')
+            print(f"{DM}Add to config.toml:{RS}")
+            print(f"  {DM}[apps]{RS}")
+            print(f'  {OR}"*{wclass.lower()}*"{RS} = {OR}"myprofile"{RS}')
             print()
-            print(f'  [profile.myprofile]')
-            print(f'  3 = "key:Backspace"')
-            print(f'  4 = "key:Ctrl+B"')
-            print(f'  5 = "button:6"')
+            print(f"  {DM}[profile.myprofile]{RS}")
+            print(f'  {DM}3 = "key:Backspace"{RS}')
+            print(f'  {DM}4 = "key:Ctrl+B"{RS}')
+            print(f'  {DM}5 = "button:6"{RS}')
         except FileNotFoundError:
-            print("FocusNotifier is not running or no window has been focused yet.")
+            print(f"{RD}FocusNotifier is not running or no window has been focused yet.{RS}")
         return
 
-    # ratbagd devices + button indices
-    print("Ratbagd-supported devices:")
+    BTN_NAME = {
+        1: "BTN_LEFT",   2: "BTN_RIGHT",   3: "BTN_MIDDLE",
+        4: "BTN_SIDE",   5: "BTN_EXTRA",   6: "BTN_FORWARD",
+        7: "BTN_BACK",   8: "BTN_TASK",
+    }
+    BTN_LABEL = {
+        "BTN_LEFT":    "left click",
+        "BTN_RIGHT":   "right click",
+        "BTN_MIDDLE":  "middle",
+        "BTN_SIDE":    "back (side)",
+        "BTN_EXTRA":   "forward (extra)",
+        "BTN_FORWARD": "modifier trigger",
+        "BTN_BACK":    "back",
+    }
+
+    _header("Ratbagd devices")
     result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
-        print("  No devices found. Is ratbagd running?")
-        print("  Try: sudo systemctl start ratbagd")
+        print(f"  {RD}No devices found. Is ratbagd running?{RS}")
+        print(f"  Try: {OR}sudo systemctl start ratbagd{RS}")
     else:
         devices = []
         for line in result.stdout.strip().splitlines():
             line = line.strip()
             if not line:
                 continue
-            # "bellowing-paca:      Logitech G305" → "Logitech G305"
             name = line.split(":", 1)[1].strip() if ":" in line else line
             if name:
                 devices.append(name)
-                print(f"  {name}")
+                print(f"  {BD}{name}{RS}")
         print()
-        # Maps ratbagd "button N" action → evdev BTN_* name used in [modifier] config
-        BTN_NAME = {
-            1: "BTN_LEFT",   2: "BTN_RIGHT",   3: "BTN_MIDDLE",
-            4: "BTN_SIDE",   5: "BTN_EXTRA",   6: "BTN_FORWARD",
-            7: "BTN_BACK",   8: "BTN_TASK",
-        }
-        BTN_LABEL = {
-            "BTN_LEFT": "left click",    "BTN_RIGHT": "right click",
-            "BTN_MIDDLE": "middle",      "BTN_SIDE": "back (side)",
-            "BTN_EXTRA": "forward (extra)", "BTN_FORWARD": "modifier trigger",
-            "BTN_BACK": "back",
-        }
 
+        import re as _re
         for name in devices:
-            print(f"  Button indices for '{name}':")
+            print(f"  {OR}{BD}Button indices{RS} {DM}for {name!r}{RS}")
             count_r = subprocess.run(
                 ["ratbagctl", name, "profile", "0", "button", "count"],
                 capture_output=True, text=True,
@@ -162,7 +191,7 @@ def cmd_detect(args):
             try:
                 count = int(count_r.stdout.strip())
             except ValueError:
-                print("    (could not read button count)")
+                print(f"    {RD}(could not read button count){RS}")
                 print()
                 continue
             for i in range(count):
@@ -173,22 +202,25 @@ def cmd_detect(args):
                 line = br.stdout.strip()
                 if not line:
                     continue
-                # Parse "Button: N is mapped to 'button M'" → extract M
-                import re as _re
                 m = _re.search(r"'button (\d+)'", line)
                 if m:
-                    btn_num = int(m.group(1))
+                    btn_num    = int(m.group(1))
                     evdev_name = BTN_NAME.get(btn_num, f"button {btn_num}")
-                    label = BTN_LABEL.get(evdev_name, "")
-                    print(f"    [{i}]  button:{btn_num:<2}  →  {evdev_name:<14}  ({label})")
+                    label      = BTN_LABEL.get(evdev_name, "")
+                    print(
+                        f"    {DM}[{i}]{RS}  "
+                        f"{OR}button:{btn_num:<2}{RS}  "
+                        f"{DM}→{RS}  "
+                        f"{BD}{evdev_name:<14}{RS}  "
+                        f"{DM}({label}){RS}"
+                    )
                 else:
-                    # macro or special action — show raw action
                     action = line.split("'")[-2] if "'" in line else line
-                    print(f"    [{i}]  {action}")
+                    print(f"    {DM}[{i}]{RS}  {action}")
             print()
 
-    # evdev listing — the correct VID:PID source, especially for wireless mice
-    print("Input device VID:PIDs (use these in config.toml, not lsusb for wireless mice):")
+    _header("Input device VID:PIDs")
+    print(f"  {DM}Use these in config.toml — more accurate than lsusb for wireless mice.{RS}\n")
     try:
         import evdev as _evdev
         seen = set()
@@ -201,23 +233,24 @@ def cmd_detect(args):
                         seen.add(key)
                         vid = format(d.info.vendor, "04x")
                         pid = format(d.info.product, "04x")
-                        print(f"  {vid}:{pid}  {d.name}")
+                        print(f"  {OR}{vid}:{pid}{RS}  {d.name}")
                 d.close()
             except Exception:
                 pass
         if not seen:
-            print("  (no input devices found)")
+            print(f"  {DM}(no input devices found){RS}")
     except ImportError:
-        print("  (python-evdev not installed, falling back to lsusb)")
+        print(f"  {DM}(python-evdev not installed, falling back to lsusb){RS}")
         result = subprocess.run(["lsusb"], capture_output=True, text=True)
         for line in result.stdout.strip().splitlines():
             print(f"  {line}")
 
     print()
-    print("Set in config.toml:")
-    print("  [device]")
-    print('  vendor  = "046d"')
-    print('  product = "4074"')
+    print(f"  {DM}Set in config.toml:{RS}")
+    print(f"  {DM}[device]{RS}")
+    print(f'  {OR}vendor{RS}  {DM}={RS} {OR2}"046d"{RS}')
+    print(f'  {OR}product{RS} {DM}={RS} {OR2}"4074"{RS}')
+    print()
 
 
 def main():

@@ -14,7 +14,7 @@ Also adds a **modifier layer**: hold one button (like the DPI button) to turn ot
 
 ## Requirements
 
-- Linux with KDE Plasma (Wayland or X11)
+- Linux with KDE Plasma (Wayland or X11) `KDE is a MUST have` for the profile switching to work properly, otherwise JUST the layered macros will work.
 - [ratbagd](https://github.com/libratbag/libratbag) — `sudo systemctl enable --now ratbagd`
 - [FocusNotifier](https://github.com/Rolv-Apneseth/focus-notifier) — KWin script that fires on window changes
 - Python 3.11+ with `python-dbus`, `python-evdev`, `python-gobject`
@@ -69,6 +69,8 @@ All configuration lives in `config.toml` inside the project folder. Open it with
 ```bash
 musfocus config
 ```
+Once you are happy with your configuration press `Ctrl+S` to save and the `Ctrl+X` to exit.
+
 
 ### Step 1 — Find your mouse's IDs
 
@@ -92,15 +94,16 @@ product = "4074"
 
 The same `detect` command prints the button indices ratbagd uses for your mouse, along with the evdev name for each:
 ```
-[0]  evdev: BTN_LEFT        (left click)
-[1]  evdev: BTN_RIGHT       (right click)
-[2]  evdev: BTN_MIDDLE      (middle)
-[3]  evdev: BTN_EXTRA       (forward (extra))
-[4]  evdev: BTN_SIDE        (back (side))
-[5]  evdev: BTN_FORWARD     (modifier trigger)
+    [0]  button:1   →  BTN_LEFT        (left click)
+    [1]  button:2   →  BTN_RIGHT       (right click)
+    [2]  button:3   →  BTN_MIDDLE      (middle)
+    [3]  button:5   →  BTN_EXTRA       (forward (extra))
+    [4]  button:4   →  BTN_SIDE        (back (side))
+    [5]  button:6   →  BTN_FORWARD     (modifier trigger)
+
 ```
 
-The number in brackets (0, 1, 3, 4, 5...) is the **button index** you use in profiles. The evdev name is what you use in the `[modifier]` section.
+The number in brackets (0, 1, 3, 4, 5...) is the **button index** you use in profiles. The evdev name is what you use in the `[modifier]` section, the number next to "button" modifier button that you will use for the layering modifier function.
 
 ### Step 3 — Add app profiles
 
@@ -162,7 +165,7 @@ BTN_RIGHT = "Super+F"  # while holding: right click fires Super+F
 
 `button = 5` is the index of the button you hold. The names (`BTN_SIDE`, `BTN_EXTRA`, `BTN_RIGHT`) are the evdev names shown by `musfocus detect`.
 
-**One required step:** the modifier button must be set to `"button:6"` in every profile. This makes the button's press visible to the background service — without this, some mice handle the button entirely in firmware and the OS never receives the event.
+**One required step:** the modifier button must be set to `"button:6"` or the corresponding button in every profile. This makes the button's press visible to the background service — without this, some mice handle the button entirely in firmware and the OS never receives the event.
 
 So if your modifier button has index 5, every profile needs this line:
 ```toml
