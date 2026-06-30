@@ -450,11 +450,16 @@ def _pause(msg="press any key to continue"):
 
 
 def _ask(prompt, default=""):
-    """Cooked-mode single-line input. Returns text (or the default), None if aborted."""
+    """Typed text input. Returns the text (or the default), or None if aborted."""
     sys.stdout.write(f"\n  {OR}{prompt}{RS}")
     if default:
         sys.stdout.write(f" {DM}[{default}]{RS}")
-    sys.stdout.write(f"\n  {OR}›{RS} ")
+    if default:
+        hint = f"type a new value, or press Enter to keep “{default}”"
+    else:
+        hint = "type your answer, then press Enter  (Enter alone = cancel)"
+    sys.stdout.write(f"\n  {DM}{hint}{RS}")
+    sys.stdout.write(f"\n  {OR}⌨ ›{RS} ")
     sys.stdout.flush()
     try:
         s = input().strip()
@@ -464,11 +469,15 @@ def _ask(prompt, default=""):
 
 
 def _confirm(prompt, default=True):
-    hint = "Y/n" if default else "y/N"
-    r = _ask(f"{prompt} ({hint})", "")
-    if r is None:
+    yes = "yes" if default else "no"
+    sys.stdout.write(f"\n  {OR}{prompt}{RS}")
+    sys.stdout.write(f"\n  {DM}type y or n, then press Enter  (Enter alone = {yes}){RS}")
+    sys.stdout.write(f"\n  {OR}⌨ ›{RS} ")
+    sys.stdout.flush()
+    try:
+        r = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
         return False
-    r = r.lower()
     if r == "":
         return default
     return r in ("y", "yes", "s", "si", "sí")
@@ -689,10 +698,11 @@ def _choose_mouse_button():
 def _choose_action():
     """Action picker. Returns an action string, '' to remove, or None to cancel."""
     opt = _select("What should this button do?", [
-        f"{OR}Mouse button{RS}    {DM}left, right, middle, back, forward{RS}",
-        f"{OR}Keyboard macro{RS}  {DM}Ctrl+C, Backspace, ...{RS}",
+        f"{OR}Mouse button{RS}          {DM}left, right, middle, back, front{RS}",
+        f"{OR}Keyboard macro{RS}        {DM}Ctrl+C, Backspace, ...{RS}",
+        f"{OR}Second-layer trigger{RS}  {DM}hold it to reach the 2nd layer{RS}",
         f"{RD}Remove{RS}",
-    ])
+    ], intro=["↑↓ to move, Enter to choose."])
     if opt is None:
         return None
     if opt == 0:
@@ -700,7 +710,23 @@ def _choose_action():
     if opt == 1:
         combo = _get_combo()
         return f"key:{combo}" if combo else None
+    if opt == 2:
+        return "button:6"          # the second-layer trigger
     return ""  # remove
+
+
+def _set_button(table, key, act):
+    """Write a button action, keeping only ONE second-layer trigger. Returns applied?"""
+    if act == "button:6":
+        existing = [k for k, v in table.items() if str(v) == "button:6" and str(k) != str(key)]
+        if existing:
+            print(f"\n  {YL}Button {existing[0]} is already the second-layer trigger.{RS}")
+            if not _confirm(f"Move the trigger to button {key} instead?", default=True):
+                return False
+            for k in existing:
+                del table[k]
+    table[key] = act
+    return True
 
 
 # ---- mouse button picker ----
@@ -789,8 +815,30 @@ def _profiles_screen():
             _edit_profile(profiles[choice])
 
 
+def _choose_app_pattern():
+    """Identify an app → return a match pattern, or None to skip."""
+    how = _select("Which app is this profile for?", [
+        "⊙ Detect the focused window  (recommended)",
+        "✎ Type the pattern myself",
+        f"{DM}Skip — assign an app later{RS}",
+    ], intro=["A profile loads automatically when its app is focused."])
+    if how is None or how == 2:
+        return None
+    wclass = None
+    if how == 0:
+        wclass = _detect_window_class()
+        if wclass:
+            print(f"\n  {GR}✓{RS} Detected: {OR}{BD}{wclass}{RS}")
+        else:
+            print(f"\n  {RD}No window class read{RS} {DM}— type one instead.{RS}")
+        _pause()
+    default_pat = f"*{wclass.lower()}*" if wclass else ""
+    return _ask("Pattern  (* = wildcard, | = or)", default_pat) or None
+
+
 def _new_profile():
-    name = _ask("New profile name  (e.g. blender)")
+    pattern = _choose_app_pattern()        # ask the app FIRST
+    name = _ask("Profile name  (e.g. blender)")
     if not name:
         return
     doc = _load_doc()
@@ -804,13 +852,52 @@ def _new_profile():
     tbl = {}
     if dpi and dpi.isdigit():
         tbl["dpi"] = int(dpi)
-    tbl["5"] = "button:6"  # keep the DPI button as the modifier trigger by default
+    tbl["5"] = "button:6"  # keep the DPI button as the trigger by default
     doc["profile"][name] = tbl
+    if pattern:
+        if doc.get("apps") is None:
+            doc["apps"] = _tomlkit().table()
+        doc["apps"][pattern] = name
     _save_doc(doc)
-    print(f"\n  {GR}✓{RS} Created {OR}{BD}{name}{RS}. {DM}Set its buttons next.{RS}")
+    for_app = f" for {OR}{pattern}{RS}" if pattern else ""
+    print(f"\n  {GR}✓{RS} Created {OR}{BD}{name}{RS}{for_app}. {DM}Set its buttons next.{RS}")
     _pause()
     _edit_profile(name)
     return name
+
+
+def _profile_apps(name):
+    while True:
+        doc = _load_doc()
+        apps = doc.get("apps", {})
+        mine = [p for p, who in apps.items() if who == name]
+        labels = [f"{OR}{p}{RS}" for p in mine]
+        labels.append(f"{GR}+ assign an app{RS}")
+        choice = _select(f"{name} · apps", labels,
+                         intro=["Apps that load this profile when focused."],
+                         footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == len(mine):
+            pat = _choose_app_pattern()
+            if pat:
+                if doc.get("apps") is None:
+                    doc["apps"] = _tomlkit().table()
+                doc["apps"][pat] = name
+                _save_doc(doc)
+        else:
+            p = mine[choice]
+            what = _select(f"App: {p}", ["Change pattern", f"{RD}Remove{RS}"])
+            if what == 0:
+                new = _ask("New pattern", p)
+                if new and new != p:
+                    del doc["apps"][p]
+                    doc["apps"][new] = name
+                    _save_doc(doc)
+            elif what == 1:
+                if _confirm(f"Remove {p!r}?", default=False):
+                    del doc["apps"][p]
+                    _save_doc(doc)
 
 
 def _edit_profile(name):
@@ -830,36 +917,41 @@ def _edit_profile(name):
             var_note = f"{len(variants)} · active: {prof.get('active') or 'base'}"
         else:
             var_note = "off"
+        mine = [p for p, who in doc.get("apps", {}).items() if who == name]
+        app_note = ", ".join(mine) if mine else "none yet"
         choice = _select(f"Profile · {OR}{name}{RS}", [
+            f"{BD}Apps{RS}           {DM}loads for · {app_note}{RS}",
             f"{BD}Buttons{RS}        {DM}what each button does{RS}",
             f"{BD}Second layer{RS}   {DM}hold + click shortcuts · {layer_note}{RS}",
-            f"{BD}Variants{RS}       {DM}switchable layouts for the same app · {var_note}{RS}",
+            f"{BD}Assignments{RS}    {DM}switchable layouts for the same app · {var_note}{RS}",
             f"{BD}DPI{RS}            {OR}{dpi}{RS}",
             f"{DM}Rename{RS}",
             f"{RD}Delete{RS}",
-        ], footer="↑↓ · enter · q back")
+        ], footer="↑↓ move · enter open · q back")
         if choice is None:
             return
         if choice == 0:
-            _buttons_screen(name)
+            _profile_apps(name)
         elif choice == 1:
-            _layer2_screen(name)
+            _buttons_screen(name)
         elif choice == 2:
-            _variants_screen(name)
+            _layer2_screen(name)
         elif choice == 3:
+            _variants_screen(name)
+        elif choice == 4:
             new = _ask("DPI", str(dpi if dpi != "—" else "400"))
             if new and new.isdigit():
                 prof["dpi"] = int(new)
                 _save_doc(doc)
                 _offer_reload()
-        elif choice == 4:
+        elif choice == 5:
             new = _ask("New name", name)
             if new and new != name:
                 doc["profile"][new] = dict(prof)
                 del doc["profile"][name]
                 _save_doc(doc)
                 name = new
-        elif choice == 5:
+        elif choice == 6:
             if _confirm(f"Delete profile {name!r}?", default=False):
                 del doc["profile"][name]
                 _save_doc(doc)
@@ -889,7 +981,8 @@ def _buttons_screen(name):
             act = _choose_action()
             if act in (None, ""):
                 continue
-            prof[idx] = act
+            if not _set_button(prof, idx, act):
+                continue
             _save_doc(doc)
             _offer_reload()
         else:                                # edit existing
@@ -899,8 +992,8 @@ def _buttons_screen(name):
                 continue
             if act == "":
                 del prof[k]
-            else:
-                prof[k] = act
+            elif not _set_button(prof, k, act):
+                continue
             _save_doc(doc)
             _offer_reload()
 
@@ -999,11 +1092,11 @@ def _variants_screen(name):
         for vn in vnames:
             mark = f"{GR}●{RS}" if vn == active else "○"
             labels.append(f"{mark} {OR}{vn}{RS}")
-        labels.append(f"{GR}+ new variant{RS}")
-        choice = _select(f"{name} · variants", labels, intro=[
+        labels.append(f"{GR}+ new assignment{RS}")
+        choice = _select(f"{name} · assignments", labels, intro=[
             "Switchable layouts for the same app — e.g. one per in-game mode.",
-            "● = active. Pick one to switch; it applies instantly.",
-        ], footer="↑↓ · enter · q back")
+            "● = active. Press Enter on one to switch; it applies instantly.",
+        ], footer="↑↓ move · enter select · q back")
         if choice is None:
             return
         if choice == 0:
@@ -1026,7 +1119,7 @@ def _variant_actions(name, vn):
         "Edit buttons",
         f"{DM}Rename{RS}",
         f"{RD}Delete{RS}",
-    ])
+    ], intro=["Enter to choose an action."])
     if choice is None:
         return
     if choice == 0:
@@ -1038,7 +1131,7 @@ def _variant_actions(name, vn):
     elif choice == 1:
         _variant_buttons(name, vn)
     elif choice == 2:
-        new = _ask("New variant name", vn)
+        new = _ask("New assignment name", vn)
         if new and new != vn:
             prof["variants"][new] = dict(prof["variants"][vn])
             del prof["variants"][vn]
@@ -1047,7 +1140,7 @@ def _variant_actions(name, vn):
             _save_doc(doc)
             _apply_now()
     elif choice == 3:
-        if _confirm(f"Delete variant {vn!r}?", default=False):
+        if _confirm(f"Delete assignment {vn!r}?", default=False):
             del prof["variants"][vn]
             if prof.get("active") == vn:
                 del prof["active"]
@@ -1058,15 +1151,16 @@ def _variant_actions(name, vn):
 
 
 def _new_variant(name):
-    vn = _ask("New variant name  (e.g. game1)")
-    if not vn:
-        return
     doc = _load_doc()
     prof = doc["profile"][name]
+    suggested = f"assignment {len(prof.get('variants') or {}) + 1}"
+    vn = _ask("New assignment name", suggested)
+    if not vn:
+        return
     if prof.get("variants") is None:
         prof["variants"] = _tomlkit().table()
     if vn in prof["variants"]:
-        print(f"\n  {RD}Variant {vn!r} already exists.{RS}")
+        print(f"\n  {RD}Assignment {vn!r} already exists.{RS}")
         _pause()
         return
     # Seed from the profile's current buttons so it starts as a copy to tweak.
@@ -1075,7 +1169,7 @@ def _new_variant(name):
         tbl[k] = prof[k]
     prof["variants"][vn] = tbl
     _save_doc(doc)
-    print(f"\n  {GR}✓{RS} Created variant {OR}{vn}{RS}. {DM}Edit its buttons next.{RS}")
+    print(f"\n  {GR}✓{RS} Created assignment {OR}{vn}{RS}. {DM}Edit its buttons next.{RS}")
     _pause()
     _variant_buttons(name, vn)
 
@@ -1089,8 +1183,8 @@ def _variant_buttons(name, vn):
                   for k in btn_keys]
         labels.append(f"{GR}+ set a button{RS}")
         choice = _select(f"{name}/{vn} · buttons", labels,
-                         intro=["What each button does in this variant."],
-                         footer="↑↓ · enter · q back")
+                         intro=["What each button does in this assignment."],
+                         footer="↑↓ move · enter open · q back")
         if choice is None:
             return
         if choice == len(btn_keys):
@@ -1100,7 +1194,8 @@ def _variant_buttons(name, vn):
             act = _choose_action()
             if act in (None, ""):
                 continue
-            var[idx] = act
+            if not _set_button(var, idx, act):
+                continue
             _save_doc(doc)
             _offer_reload()
         else:
@@ -1110,8 +1205,8 @@ def _variant_buttons(name, vn):
                 continue
             if act == "":
                 del var[k]
-            else:
-                var[k] = act
+            elif not _set_button(var, k, act):
+                continue
             _save_doc(doc)
             _offer_reload()
 
@@ -1328,15 +1423,15 @@ def cmd_config_menu(args):
         return
     while True:
         choice = _select("Configuration", [
-            f"{BD}Profiles{RS}      {DM}buttons & shortcuts per app{RS}",
-            f"{BD}App mappings{RS}  {DM}which app uses which profile{RS}",
+            f"{BD}Profiles{RS}      {DM}buttons, shortcuts & the app each is for{RS}",
             f"{BD}Device{RS}        {DM}choose your mouse{RS}",
             f"{DM}Edit config.toml in your editor{RS}",
-        ], intro=["Changes save automatically."],
-           footer="↑↓ · enter · q back to main menu")
+        ], intro=["Changes save and apply automatically.",
+                  "App assignment lives inside each profile (create one to set it)."],
+           footer="↑↓ move · enter open · q back to main menu")
         if choice is None:
             return
-        if choice == 3:
+        if choice == 2:
             cmd_config(_NS())
             continue
         if not _require_tomlkit():
@@ -1344,8 +1439,6 @@ def cmd_config_menu(args):
         if choice == 0:
             _profiles_screen()
         elif choice == 1:
-            _apps_screen()
-        elif choice == 2:
             _device_screen()
 
 

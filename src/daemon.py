@@ -230,7 +230,8 @@ def run():
     active = {}      # source evdev code → emitted codes currently held down
     held = set()     # drag buttons currently down
 
-    state = {"name": None, "first": {}, "second": {}, "dpi": None, "dpi_target": None}
+    state = {"name": None, "first": {}, "second": {}, "dpi": None,
+             "dpi_target": None, "trigger": None}
     last_config = {"data": config}
 
     def read_config():
@@ -266,6 +267,19 @@ def run():
         state["first"]      = build_first_layer(eff)
         state["second"]     = build_second_layer(eff.get("layer2", global_mod))
         state["dpi_target"] = eff.get("dpi")
+        # The trigger (modifier) is whichever button this profile maps to "button:6".
+        # If none, this profile has no second layer and that button is free to remap.
+        trigger = None
+        for k, v in eff.items():
+            if k in ("dpi", "layer2", "variants", "active"):
+                continue
+            if str(v) == "button:6":
+                try:
+                    trigger = base_code(int(k))
+                except (ValueError, TypeError):
+                    trigger = None
+                break
+        state["trigger"] = trigger
         maybe_apply_dpi()
 
     # Set the fixed firmware base once (so physical buttons emit known codes), then
@@ -289,6 +303,7 @@ def run():
             if m != last_mtime:
                 last_mtime = m
                 load_active()
+                modifier_held = False   # trigger may have changed with the profile
 
             if not r:
                 continue
@@ -305,7 +320,7 @@ def run():
 
                 code, val = event.code, event.value
 
-                if code == MODIFIER_EVDEV:
+                if state["trigger"] is not None and code == state["trigger"]:
                     # The trigger autorepeats (val==2) while held; only val==0 releases.
                     modifier_held = (val != 0)
                     continue
