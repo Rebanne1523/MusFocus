@@ -488,13 +488,23 @@ def _confirm(prompt, default=True):
     return r in ("y", "yes", "s", "si", "sí")
 
 
+def _quit_app():
+    """Close musfocus entirely."""
+    print("\033[2J\033[H\033[?25h", end="")
+    print(f"{OR}musfocus{RS} {DM}— bye{RS}")
+    sys.exit(0)
+
+
 def _select(title, labels, footer="↑↓ move · enter select · q back", intro=None):
     """Generic arrow-key selector over `labels`. Returns the chosen index, or None.
 
-    `intro` is an optional list of dim help lines shown under the title.
+    A persistent "Exit musfocus" entry is always shown at the very bottom and quits
+    the app outright. `intro` is optional dim help lines shown under the title.
     """
     if not (_TTY and sys.stdin.isatty()):
         return None
+    n = len(labels)
+    quit_idx = n            # synthetic last entry
     idx = 0
     while True:
         print("\033[2J\033[H", end="")
@@ -510,17 +520,22 @@ def _select(title, labels, footer="↑↓ move · enter select · q back", intro
                 print(f"  {OR}{BD}›{RS} {label}")
             else:
                 print(f"    {label}")
+        print(f"  {DM}{'·' * 30}{RS}")
+        exit_label = f"{RD}✕ Exit musfocus{RS}"
+        print(f"  {OR}{BD}›{RS} {exit_label}" if idx == quit_idx else f"    {exit_label}")
         print(f"\n  {DM}{footer}{RS}")
         key = _read_key()
         if key in ("q", "Q", "esc", "\x03"):
             return None
         elif key == "up":
-            idx = (idx - 1) % len(labels)
+            idx = (idx - 1) % (n + 1)
         elif key == "down":
-            idx = (idx + 1) % len(labels)
+            idx = (idx + 1) % (n + 1)
         elif key in ("\r", "\n"):
+            if idx == quit_idx:
+                _quit_app()
             return idx
-        elif key.isdigit() and 1 <= int(key) <= min(9, len(labels)):
+        elif key.isdigit() and 1 <= int(key) <= min(9, n):
             return int(key) - 1
 
 
@@ -993,10 +1008,9 @@ def _edit_profile(name):
             text = label.center(bw)
             arrow = f"{OR}{BD}▸{RS}" if is_cursor else " "
             if is_active:
-                c = GR + BD
-                top = f"{c}█{'█' * bw}█{RS}"
-                mid = f"{c}█{RS}{GR}{BD}{text}{RS}{c}█{RS}"
-                bot = f"{c}█{'█' * bw}█{RS}"
+                top = f"{GR}{'▄' * (bw + 2)}{RS}"
+                mid = f"{GR}{BD}█{RS}{GR}{BD}{text}{RS}{GR}{BD}█{RS}"
+                bot = f"{GR}{'▀' * (bw + 2)}{RS}"
             else:
                 top = f"{DM}╒{'═' * bw}╕{RS}"
                 mid = f"{DM}│{text}│{RS}"
@@ -1015,21 +1029,25 @@ def _edit_profile(name):
         print(sep)
         row(6, "Rename profile")
         row(7, f"{RD}Delete profile{RS}")
+        print(f"  {DM}{'·' * 30}{RS}")
+        row(8, f"{RD}✕ Exit musfocus{RS}")
         print(f"\n  {DM}↑↓ move · ←→ switch tab · Enter select · q back{RS}")
 
         key = _read_key()
         if key in ("q", "Q", "esc", "\x03"):
             return
         elif key == "up":
-            idx = (idx - 1) % 8
+            idx = (idx - 1) % 9
         elif key == "down":
-            idx = (idx + 1) % 8
+            idx = (idx + 1) % 9
         elif key == "left" and idx == 2:
             idx = 1
         elif key == "right" and idx == 1:
             idx = 2
         elif key in ("\r", "\n"):
-            if idx == 0:
+            if idx == 8:
+                _quit_app()
+            elif idx == 0:
                 _profile_apps(name)
             elif idx in (1, 2):
                 prof["active"] = a1 if idx == 1 else a2
@@ -1630,6 +1648,8 @@ def cmd_menu(args):
         cmd_status(args)
         return
 
+    n = len(_MENU)
+    quit_idx = n
     idx = 0
     while True:
         print("\033[2J\033[H", end="")    # clear screen + home
@@ -1641,7 +1661,10 @@ def cmd_menu(args):
                 print(f"  {OR}{BD}›{RS} {num}  {OR}{BD}{name:<8}{RS} {DM}{desc}{RS}")
             else:
                 print(f"    {num}  {name:<8} {DM}{desc}{RS}")
-        print(f"\n  {DM}↑↓ move · enter select · 1-{len(_MENU)} jump · q quit{RS}")
+        print(f"  {DM}{'·' * 30}{RS}")
+        exit_label = f"{RD}✕ Exit musfocus{RS}"
+        print(f"  {OR}{BD}›{RS}    {exit_label}" if idx == quit_idx else f"       {exit_label}")
+        print(f"\n  {DM}↑↓ move · enter select · 1-{n} jump · q quit{RS}")
 
         try:
             key = _read_key()
@@ -1650,12 +1673,14 @@ def cmd_menu(args):
         if key in ("q", "Q", "esc", "\x03"):
             break
         elif key == "up":
-            idx = (idx - 1) % len(_MENU)
+            idx = (idx - 1) % (n + 1)
         elif key == "down":
-            idx = (idx + 1) % len(_MENU)
+            idx = (idx + 1) % (n + 1)
         elif key in ("\r", "\n"):
+            if idx == quit_idx:
+                break
             _run_menu_item(idx)
-        elif key.isdigit() and 1 <= int(key) <= len(_MENU):
+        elif key.isdigit() and 1 <= int(key) <= n:
             idx = int(key) - 1
             _run_menu_item(idx)
 
