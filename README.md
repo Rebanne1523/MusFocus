@@ -2,22 +2,22 @@
 
 Automatically switches your mouse button layout based on which app is active, for any mouse supported by [ratbagd/piper](https://github.com/libratbag/libratbag).
 
-Also adds a **modifier layer**: hold one button (like the DPI button) to turn other buttons into keyboard shortcuts — similar to how holding Shift gives you capital letters, but for your mouse. 
+Also adds a **second modifier layer**: hold one button (like the DPI button) to give buttons second layer of functionability — similar to how holding Shift gives you capital letters, but for your mouse and every new action is customizable. 
 
-This application is tailored to help users who want extra features on their mice, or who are looking for a solution for mice that only support 1 on-board profile — saving new profiles in the system rather than in the mouse's memory.
+This application is tailored to help users who want extra features on their mice / looking for a linux alternative to Logitch G-Hub Software / looking for a solution for mice that only support 1 on-board profile — saving new profiles in the system rather than in the mouse's memory.
 
 ## Features
 
 - Per-app button remapping, macros, and DPI (switches automatically when you change windows)
-- **Instant** profile switching — button remaps are done in software, so there's no firmware write to wait for and dragging across windows never glitches
-- Second layer per profile: hold one button to unlock a different set of actions on other buttons (different per app)
+- **Instant** profile switching — button remaps are done in software.
+- Second layer per profile: hold one button to unlock a second function layer on other buttons (different per app)
 - Friendly interactive menu (`musfocus`) — add/edit profiles, app mappings, shortcuts, and capture key combos by just pressing them
 - Works with any ratbagd-supported mouse (Logitech, Razer, SteelSeries, Roccat, etc.)
 - One config file — no Python knowledge needed
 
 ## Requirements
 
-- Linux with KDE Plasma (Wayland or X11) `KDE is a MUST have` for the profile switching to work properly, otherwise JUST the layered macros will work.
+- Linux with KDE Plasma (Wayland or X11) `KDE is a MUST have` for the profile switching to work properly, otherwise JUST the layered macros will work. `(other Distro compatibility is being worked on)`
 - [ratbagd](https://github.com/libratbag/libratbag) — `sudo systemctl enable --now ratbagd`
 - [FocusNotifier](https://github.com/Rolv-Apneseth/focus-notifier) — KWin script that fires on window changes
 - Python 3.11+ with `python-dbus`, `python-evdev`, `python-gobject`, `python-tomlkit`
