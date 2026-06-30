@@ -7,6 +7,7 @@ CONFIG_PATH = os.path.join(INSTALL_DIR, "config.toml")
 SRC_DIR     = os.path.join(INSTALL_DIR, "src")
 CACHE_FILE  = "/tmp/musfocus-cache"
 SERVICE     = "musfocus-modifier"
+FALLBACK_PROFILE = "desktop"   # profile used when no app mapping matches
 
 # ── Color palette (orange/black, dark+light compatible) ──────────────────────
 _TTY = sys.stdout.isatty()
@@ -198,7 +199,7 @@ def cmd_list(args):
         for pattern, profile in apps.items():
             print(f"  {DM}{pattern!r}{RS}  {DM}→{RS}  {OR}{profile}{RS}")
     else:
-        print(f"  {DM}(none — all apps use 'default' profile){RS}")
+        print(f"  {DM}(none — all apps use the 'desktop' profile){RS}")
     print()
 
 
@@ -235,7 +236,7 @@ def cmd_reload(args):
         pass
 
     print(f"{GR}✓{RS} Done. Profile will re-apply on next window focus change.")
-    print(f"  Or run: {OR}musfocus apply default{RS}")
+    print(f"  Or run: {OR}musfocus apply desktop{RS}")
 
 
 def cmd_detect(args):
@@ -495,6 +496,13 @@ def _quit_app():
     sys.exit(0)
 
 
+def _exit_row(selected):
+    """A calm, button-like 'Exit' row shown at the bottom of every menu."""
+    if selected:
+        return f"  {OR}{BD}▸{RS} {OR}❮ Exit ❯{RS}"
+    return f"    {DM}❮ Exit ❯{RS}"
+
+
 def _select(title, labels, footer="↑↓ move · enter select · q back", intro=None):
     """Generic arrow-key selector over `labels`. Returns the chosen index, or None.
 
@@ -521,8 +529,7 @@ def _select(title, labels, footer="↑↓ move · enter select · q back", intro
             else:
                 print(f"    {label}")
         print(f"  {DM}{'·' * 30}{RS}")
-        exit_label = f"{RD}✕ Exit musfocus{RS}"
-        print(f"  {OR}{BD}›{RS} {exit_label}" if idx == quit_idx else f"    {exit_label}")
+        print(_exit_row(idx == quit_idx))
         print(f"\n  {DM}{footer}{RS}")
         key = _read_key()
         if key in ("q", "Q", "esc", "\x03"):
@@ -543,9 +550,9 @@ def _apply_now():
     """Nudge the daemon to re-read config and apply edits instantly (no restart)."""
     try:
         with open(CACHE_FILE) as f:
-            cur = f.read().strip() or "default"
+            cur = f.read().strip() or FALLBACK_PROFILE
     except FileNotFoundError:
-        cur = "default"
+        cur = FALLBACK_PROFILE
     tmp = CACHE_FILE + ".tmp"
     with open(tmp, "w") as f:
         f.write(cur)
@@ -737,7 +744,13 @@ def _choose_action():
 
 def _set_button(table, key, act):
     """Write a button action, keeping only ONE second-layer trigger. Returns applied?"""
+    current = str(table.get(key, ""))
     if act == "button:6":
+        if current and current != "button:6":
+            print(f"\n  {YL}This button already does:{RS} {_action_summary(current)}")
+            print(f"  {DM}A button can't be both. If you continue, that action stops working.{RS}")
+            if not _confirm("Make it the trigger anyway?", default=True):
+                return False
         existing = [k for k, v in table.items() if str(v) == "button:6" and str(k) != str(key)]
         if existing:
             print(f"\n  {YL}Button {existing[0]} is already the second-layer trigger.{RS}")
@@ -745,6 +758,11 @@ def _set_button(table, key, act):
                 return False
             for k in existing:
                 del table[k]
+    elif current == "button:6":
+        print(f"\n  {YL}This button is the second-layer trigger.{RS}")
+        print(f"  {DM}Replacing it leaves the second layer with no trigger to hold.{RS}")
+        if not _confirm("Replace it anyway?", default=True):
+            return False
     table[key] = act
     return True
 
@@ -967,7 +985,8 @@ def _edit_profile(name):
     if not (_TTY and sys.stdin.isatty()):
         return
 
-    idx = 0   # cursor: 0 Apps · 1/2 tabs · 3 Buttons · 4 Second layer · 5 DPI · 6 Rename · 7 Delete
+    is_desktop = (name == FALLBACK_PROFILE)   # the always-present fallback profile
+    idx = 0
     while True:
         doc = _load_doc()
         prof = doc.get("profile", {}).get(name)
@@ -989,18 +1008,32 @@ def _edit_profile(name):
         mine = [p for p, who in doc.get("apps", {}).items() if who == name]
         app_note = ", ".join(mine) if mine else "none yet"
 
+        # Build the navigable item list (the desktop profile hides app/rename/delete).
+        items = []
+        if not is_desktop:
+            items.append("apps")
+        items += ["tab1", "tab2", "buttons", "second", "dpi"]
+        if not is_desktop:
+            items += ["rename", "delete"]
+        items.append("exit")
+        idx %= len(items)
+        cur = items[idx]
+
         print("\033[2J\033[H", end="")
         print_banner()
         _header(f"Profile · {name}")
-
-        def row(i, text):
-            mark = f"{OR}{BD}›{RS} " if idx == i else "  "
-            print(f"  {mark}{text}")
-
         sep = f"  {DM}{'─' * 44}{RS}"
 
-        row(0, f"{BD}Apps{RS}   {DM}{app_note}{RS}")
-        print(sep)
+        def row(kind, text):
+            mark = f"{OR}{BD}›{RS} " if cur == kind else "  "
+            print(f"  {mark}{text}")
+
+        if "apps" in items:
+            row("apps", f"{BD}Apps{RS}   {DM}{app_note}{RS}")
+            print(sep)
+        elif is_desktop:
+            print(f"  {DM}Default profile — used when no app matches.{RS}")
+            print(sep)
 
         bw = max(13, len(a1) + 2, len(a2) + 2)
 
@@ -1016,54 +1049,56 @@ def _edit_profile(name):
                 mid = f"{DM}│{text}│{RS}"
                 bot = f"{DM}╘{'═' * bw}╛{RS}"
             return [f"  {top}", f"{arrow} {mid}", f"  {bot}"]
-        b1 = box(a1, active == a1, idx == 1)
-        b2 = box(a2, active == a2, idx == 2)
-        for l, r in zip(b1, b2):
+        for l, r in zip(box(a1, active == a1, cur == "tab1"),
+                        box(a2, active == a2, cur == "tab2")):
             print(f"   {l}     {r}")
         print(f"   {DM}filled green = active · Enter on a box makes it active{RS}")
         print(sep)
 
-        row(3, f"{BD}Buttons{RS}        {DM}{nbtn} set{RS}")
-        row(4, f"{BD}Second layer{RS}   {DM}{nsh} shortcut(s){RS}")
-        row(5, f"{BD}DPI{RS}            {OR}{adpi}{RS}")
-        print(sep)
-        row(6, "Rename profile")
-        row(7, f"{RD}Delete profile{RS}")
+        row("buttons", f"{BD}Buttons{RS}        {DM}{nbtn} set{RS}")
+        row("second", f"{BD}Second layer{RS}   {DM}{nsh} shortcut(s){RS}")
+        row("dpi", f"{BD}DPI{RS}            {OR}{adpi}{RS}")
+        if "rename" in items or "delete" in items:
+            print(sep)
+            if "rename" in items:
+                row("rename", "Rename profile")
+            if "delete" in items:
+                row("delete", f"{RD}Delete profile{RS}")
         print(f"  {DM}{'·' * 30}{RS}")
-        row(8, f"{RD}✕ Exit musfocus{RS}")
+        print(_exit_row(cur == "exit"))
         print(f"\n  {DM}↑↓ move · ←→ switch tab · Enter select · q back{RS}")
 
         key = _read_key()
         if key in ("q", "Q", "esc", "\x03"):
             return
         elif key == "up":
-            idx = (idx - 1) % 9
+            idx = (idx - 1) % len(items)
         elif key == "down":
-            idx = (idx + 1) % 9
-        elif key == "left" and idx == 2:
-            idx = 1
-        elif key == "right" and idx == 1:
-            idx = 2
+            idx = (idx + 1) % len(items)
+        elif key == "left" and cur == "tab2":
+            idx = items.index("tab1")
+        elif key == "right" and cur == "tab1":
+            idx = items.index("tab2")
         elif key in ("\r", "\n"):
-            if idx == 8:
+            if cur == "exit":
                 _quit_app()
-            elif idx == 0:
+            elif cur == "apps":
                 _profile_apps(name)
-            elif idx in (1, 2):
-                prof["active"] = a1 if idx == 1 else a2
+            elif cur in ("tab1", "tab2"):
+                prof["active"] = a1 if cur == "tab1" else a2
                 _save_doc(doc)
                 _apply_now()
-            elif idx == 3:
+            elif cur == "buttons":
                 _variant_buttons(name, active)
-            elif idx == 4:
+            elif cur == "second":
                 _variant_layer2(name, active)
-            elif idx == 5:
+            elif cur == "dpi":
                 new = _ask("DPI", str(adpi if adpi != "—" else "400"))
                 if new and new.isdigit():
                     act["dpi"] = int(new)
                     _save_doc(doc)
                     _apply_now()
-            elif idx == 6:
+            elif cur == "rename":
                 new = _ask("New name", name)
                 if new and new != name:
                     doc["profile"][new] = dict(prof)
@@ -1073,7 +1108,7 @@ def _edit_profile(name):
                             doc["apps"][p] = new
                     _save_doc(doc)
                     name = new
-            elif idx == 7:
+            elif cur == "delete":
                 if _confirm(f"Delete profile {name!r}?", default=False):
                     del doc["profile"][name]
                     for p, who in list(doc.get("apps", {}).items()):
@@ -1362,10 +1397,14 @@ def _variant_layer2(name, vn):
             return v["layer2"]
 
         if choice == 0:
-            print(f"\n  {DM}Pick the button to HOLD for the second layer.{RS}")
-            _pause("press any key to choose")
             bidx = _pick_button_index()
             if bidx:
+                cur = str(var.get(bidx, ""))
+                if cur and cur != "button:6":
+                    print(f"\n  {YL}Button {bidx} already does:{RS} {_action_summary(cur)}")
+                    print(f"  {DM}A button can't be both. If you continue, that action stops working.{RS}")
+                    if not _confirm("Make it the trigger anyway?", default=True):
+                        continue
                 for k in [k for k, v in list(var.items())
                           if str(v) == "button:6" and str(k) != str(bidx)]:
                     del var[k]
@@ -1459,7 +1498,7 @@ def _apps_screen():
         labels = [f"{DM}{p}{RS}  {OR}→ {apps[p]}{RS}" for p in patterns]
         labels.append(f"{GR}+ new app mapping{RS}")
         choice = _select("App mappings", labels,
-                         intro=["When an app is focused, load its profile (else 'default')."],
+                         intro=["When an app is focused, load its profile (else 'desktop')."],
                          footer="↑↓ · enter · q back")
         if choice is None:
             return
@@ -1662,8 +1701,7 @@ def cmd_menu(args):
             else:
                 print(f"    {num}  {name:<8} {DM}{desc}{RS}")
         print(f"  {DM}{'·' * 30}{RS}")
-        exit_label = f"{RD}✕ Exit musfocus{RS}"
-        print(f"  {OR}{BD}›{RS}    {exit_label}" if idx == quit_idx else f"       {exit_label}")
+        print(_exit_row(idx == quit_idx))
         print(f"\n  {DM}↑↓ move · enter select · 1-{n} jump · q quit{RS}")
 
         try:

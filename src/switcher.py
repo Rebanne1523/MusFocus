@@ -20,7 +20,7 @@ def match_profile(window_class, apps):
         for part in pattern.split("|"):
             if fnmatch.fnmatch(wclass, part.strip()):
                 return profile
-    return "default"
+    return "desktop"
 
 
 def main():

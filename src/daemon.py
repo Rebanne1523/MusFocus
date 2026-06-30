@@ -261,7 +261,7 @@ def run():
         except OSError:
             name = ""
         if name not in profiles:
-            name = "default" if "default" in profiles else name
+            name = "desktop" if "desktop" in profiles else name
         eff = effective_profile(profiles.get(name, {}))
         state["name"]       = name
         state["first"]      = build_first_layer(eff)

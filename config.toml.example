@@ -15,7 +15,7 @@ product = "4074"
 # "*blender*" = "blender"
 # "*code*|*cursor*" = "coding"
 
-[profile.default]
+[profile.desktop]
 # dpi = N        → set DPI when this profile activates (optional)
 # "button:N"     → send a mouse button (1=left 2=right 3=middle 4=back 5=front 6=trigger)
 # "key:Shortcut" → send a keyboard macro, e.g. "key:Ctrl+B"
@@ -26,7 +26,7 @@ dpi = 1600
 
 # Second layer: hold the trigger button, then click these → fire a shortcut.
 # This is per-profile, so it can differ per app.
-[profile.default.layer2]
+[profile.desktop.layer2]
 BTN_SIDE  = "Ctrl+C"   # hold trigger + back (rear) thumb  → Ctrl+C
 BTN_EXTRA = "Ctrl+V"   # hold trigger + front thumb        → Ctrl+V
 BTN_RIGHT = "Super+F"  # hold trigger + right click        → Super+F

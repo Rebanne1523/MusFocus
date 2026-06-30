@@ -11,8 +11,9 @@ This application is tailored to help users who want extra features on their mice
 - Per-app button remapping, macros, and DPI (switches automatically when you change windows)
 - **Instant** profile switching — button remaps are done in software.
 - Second layer per profile: hold one button to unlock a second function layer on other buttons (different per app)
-- Profile variants: keep several switchable layouts in one profile (e.g. one per in-game mode) and pick the active one from the menu — handy for a single app like Roblox that runs many different games
-- Friendly interactive menu (`musfocus`) — add/edit profiles, app mappings, shortcuts, and capture key combos by just pressing them
+- Two switchable **assignments** per profile (e.g. one layout per in-game mode) — flip the active one from the menu; handy for a single app like Roblox that runs many different games
+- Configurable trigger: any button can be the one you hold for the second layer (the DPI button by default)
+- Friendly interactive menu (`musfocus`) — everything is set up here: profiles, the app each is for, buttons, shortcuts (captured by just pressing the keys)
 - Works with any ratbagd-supported mouse (Logitech, Razer, SteelSeries, Roccat, etc.)
 - No config files to edit — set everything up from the menu
 
@@ -65,16 +66,16 @@ musfocus
 Move with ↑↓, select with Enter, go back with `q`. A typical first-time setup:
 
 1. **Pick your mouse** — `Configuration → Device`, choose it from the list.
-2. **Make a profile** — `Configuration → Profiles → + new profile`. Inside it you can:
-   - remap a button to another mouse button,
-   - give a button a keyboard macro — **just press the keys** and it captures them,
-   - set the **second layer**: hold the trigger button (your DPI button) and click another
-     button to fire a shortcut.
-3. **Map it to an app** — `Configuration → App mappings → + new`. Use *Detect window* and it
-   reads whichever app you focus next, so you don't need to know its name.
+2. **Make a profile** — `Configuration → Profiles → + new profile`. It **first asks which app
+   this profile is for** (it can *detect* the focused window, so you don't need its name), then
+   you set the profile up:
+   - each button — a mouse button, or a keyboard macro (**just press the keys** to capture it),
+   - the **second layer** — pick a button as the *trigger* (the DPI button by default); hold it
+     and click another button to fire a shortcut,
+   - two **assignments** — switchable layouts you flip between right from the profile screen.
 
-Focus the app and the profile follows automatically — instantly. That's the whole workflow;
-you never have to touch a config file.
+Focus the app and the profile follows automatically — instantly. Whatever app doesn't match
+anything uses the built-in **`desktop`** profile. You never have to touch a config file.
 
 ## How it works
 
@@ -114,17 +115,22 @@ The menu writes everything to `config.toml`, but you can edit it directly with
 - `<index> = "button:N"` — make a physical button act as a mouse button
   (`1`=left, `2`=right, `3`=middle, `4`=back, `5`=front, `6`=trigger)
 - `<index> = "key:Combo"` — fire a keyboard macro, e.g. `"key:Ctrl+B"`
+- `<index> = "button:6"` — make that button the **trigger** for the second layer. Only one
+  button can be the trigger; a profile with none simply has no second layer (so that button is
+  free to be a normal key/macro).
 - `[profile.X.layer2]` — the second layer; `BTN_SIDE` / `BTN_EXTRA` / `BTN_RIGHT` → a shortcut,
-  fired while the trigger button (`button:6`) is held
+  fired while the trigger is held
 
 Run `musfocus detect` to see your mouse's button indices and evdev names.
 
-**Variants** — a profile can hold several switchable layouts under
-`[profile.X.variants.<name>]`, with `active = "<name>"` choosing the live one. Each
-variant overrides only the keys it lists; the rest fall back to the profile. Switch the
-active variant from the menu (`Profiles → your profile → Variants`) — it applies instantly.
-This lets one app (say Roblox) carry a different layout per in-game mode without making a
-separate profile and app-mapping for each.
+**Assignments** — every profile carries **two** switchable layouts under
+`[profile.X.variants.<name>]`, with `active = "<name>"` choosing the live one. Each assignment
+has its own buttons, second layer and DPI. Flip the active one from the menu
+(`Profiles → your profile`, then Enter on a tab) — it applies instantly. This lets one app
+(say Roblox) carry a different layout per in-game mode without a separate profile for each.
+
+The **`desktop`** profile is special: it's the fallback used when no app matches, so it can't
+be deleted and has no app of its own.
 
 <details>
 <summary>Full config.toml example</summary>
@@ -137,13 +143,13 @@ product = "4074"
 [apps]
 "*resolve*|*davinci*" = "davinci"
 
-[profile.default]
+[profile.desktop]      # the fallback profile (used when no app matches)
 dpi = 1600
 3 = "button:5"      # rear thumb button  → acts as front
 4 = "button:4"      # front thumb button → acts as back
-5 = "button:6"      # trigger button (required in every profile)
+5 = "button:6"      # the trigger button you hold for the second layer
 
-[profile.default.layer2]
+[profile.desktop.layer2]
 BTN_SIDE  = "Ctrl+C"   # hold trigger + back thumb  → Ctrl+C
 BTN_EXTRA = "Ctrl+V"   # hold trigger + front thumb → Ctrl+V
 
