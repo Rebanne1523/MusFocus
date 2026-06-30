@@ -172,20 +172,25 @@ def cmd_list(args):
 
     _header("Profiles")
     for name, prof in config.get("profile", {}).items():
-        dpi = prof.get("dpi")
-        print(f"  {OR}{BD}{name}{RS}  {DM}dpi {dpi}{RS}" if dpi else f"  {OR}{BD}{name}{RS}")
-        for btn, action in prof.items():
+        variants = prof.get("variants") or {}
+        active = prof.get("active")
+        # Show the active assignment's layout (profiles carry two assignments).
+        layout = variants.get(active) if (variants and active in variants) else prof
+        dpi = layout.get("dpi")
+        head = f"  {OR}{BD}{name}{RS}"
+        if variants:
+            head += f"  {DM}[{active or '?'} of {len(variants)}]{RS}"
+        if dpi:
+            head += f"  {DM}dpi {dpi}{RS}"
+        print(head)
+        for btn, action in layout.items():
             if btn in ("dpi", "layer2", "variants", "active"):
                 continue
             print(f"    {DM}button {btn}{RS}  {DM}→{RS}  {action}")
-        layer = prof.get("layer2", global_mod)
+        layer = layout.get("layer2", global_mod)
         for k, v in layer.items():
             if k.startswith("BTN_"):
                 print(f"    {DM}hold +{RS} {k:<10} {DM}→{RS}  {OR}{v}{RS}")
-        variants = prof.get("variants") or {}
-        if variants:
-            active = prof.get("active") or "base"
-            print(f"    {DM}variants{RS}  {OR}{', '.join(variants)}{RS}  {DM}(active: {active}){RS}")
 
     _header("App mappings")
     apps = config.get("apps", {})
@@ -405,7 +410,7 @@ def _read_key():
         ch = sys.stdin.read(1)
         if ch == "\x1b":  # escape sequence (arrow keys) or bare Esc
             seq = sys.stdin.read(2)
-            return {"[A": "up", "[B": "down"}.get(seq, "esc")
+            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left"}.get(seq, "esc")
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -836,6 +841,42 @@ def _choose_app_pattern():
     return _ask("Pattern  (* = wildcard, | = or)", default_pat) or None
 
 
+def _ensure_two_assignments(doc, name):
+    """Guarantee a profile has exactly-two 'assignments' (variants).
+
+    Legacy profiles with top-level buttons are migrated into assignment 1 & 2.
+    """
+    tk = _tomlkit()
+    prof = doc["profile"][name]
+    variants = prof.get("variants")
+    if not variants:
+        base = {k: prof[k] for k in list(prof.keys()) if k not in ("variants", "active")}
+        if not any(k for k in base if k not in ("dpi", "layer2")):
+            base = {"dpi": base.get("dpi", 400), "3": "button:5",
+                    "4": "button:4", "5": "button:6"}
+        for k in list(prof.keys()):
+            if k not in ("variants", "active"):
+                del prof[k]
+        prof["variants"] = tk.table()
+        for an in ("assignment 1", "assignment 2"):
+            t = tk.table()
+            for k, v in base.items():
+                t[k] = v
+            prof["variants"][an] = t
+        prof["active"] = "assignment 1"
+        return
+    names = list(variants.keys())
+    while len(prof["variants"]) < 2:
+        src = prof["variants"][names[0]]
+        t = tk.table()
+        for k in src:
+            t[k] = src[k]
+        prof["variants"][f"assignment {len(prof['variants']) + 1}"] = t
+        names = list(prof["variants"].keys())
+    if prof.get("active") not in prof["variants"]:
+        prof["active"] = list(prof["variants"].keys())[0]
+
+
 def _new_profile():
     pattern = _choose_app_pattern()        # ask the app FIRST
     name = _ask("Profile name  (e.g. blender)")
@@ -849,18 +890,18 @@ def _new_profile():
         _pause()
         return name
     dpi = _ask("DPI for this profile", "400")
-    tbl = {}
+    prof = _tomlkit().table()
     if dpi and dpi.isdigit():
-        tbl["dpi"] = int(dpi)
-    tbl["5"] = "button:6"  # keep the DPI button as the trigger by default
-    doc["profile"][name] = tbl
+        prof["dpi"] = int(dpi)
+    doc["profile"][name] = prof
+    _ensure_two_assignments(doc, name)     # gives it assignment 1 & 2
     if pattern:
         if doc.get("apps") is None:
             doc["apps"] = _tomlkit().table()
         doc["apps"][pattern] = name
     _save_doc(doc)
     for_app = f" for {OR}{pattern}{RS}" if pattern else ""
-    print(f"\n  {GR}✓{RS} Created {OR}{BD}{name}{RS}{for_app}. {DM}Set its buttons next.{RS}")
+    print(f"\n  {GR}✓{RS} Created {OR}{BD}{name}{RS}{for_app}. {DM}Set it up next.{RS}")
     _pause()
     _edit_profile(name)
     return name
@@ -901,61 +942,115 @@ def _profile_apps(name):
 
 
 def _edit_profile(name):
+    # Every profile carries exactly two assignments (switchable layouts).
+    doc = _load_doc()
+    if name not in doc.get("profile", {}):
+        return
+    _ensure_two_assignments(doc, name)
+    _save_doc(doc)
+
+    if not (_TTY and sys.stdin.isatty()):
+        return
+
+    idx = 0   # cursor: 0 Apps · 1/2 tabs · 3 Buttons · 4 Second layer · 5 DPI · 6 Rename · 7 Delete
     while True:
         doc = _load_doc()
         prof = doc.get("profile", {}).get(name)
         if prof is None:
             return
-        dpi = prof.get("dpi", "—")
-        l2 = prof.get("layer2")
-        if l2 is None:
-            layer_note = "shared defaults"
-        else:
-            layer_note = f"{len([k for k in l2 if k in _BTN_FRIENDLY])} shortcut(s)"
         variants = prof.get("variants") or {}
-        if variants:
-            var_note = f"{len(variants)} · active: {prof.get('active') or 'base'}"
-        else:
-            var_note = "off"
+        anames = list(variants.keys())
+        if len(anames) < 2:
+            _ensure_two_assignments(doc, name)
+            _save_doc(doc)
+            continue
+        a1, a2 = anames[0], anames[1]
+        active = prof.get("active") if prof.get("active") in variants else a1
+        act = variants[active]
+        nbtn = len([k for k in act if k not in _PROFILE_META])
+        l2 = act.get("layer2") or {}
+        nsh = len([k for k in l2 if k in _BTN_FRIENDLY])
+        adpi = act.get("dpi", "—")
         mine = [p for p, who in doc.get("apps", {}).items() if who == name]
         app_note = ", ".join(mine) if mine else "none yet"
-        choice = _select(f"Profile · {OR}{name}{RS}", [
-            f"{BD}Apps{RS}           {DM}loads for · {app_note}{RS}",
-            f"{BD}Buttons{RS}        {DM}what each button does{RS}",
-            f"{BD}Second layer{RS}   {DM}hold + click shortcuts · {layer_note}{RS}",
-            f"{BD}Assignments{RS}    {DM}switchable layouts for the same app · {var_note}{RS}",
-            f"{BD}DPI{RS}            {OR}{dpi}{RS}",
-            f"{DM}Rename{RS}",
-            f"{RD}Delete{RS}",
-        ], footer="↑↓ move · enter open · q back")
-        if choice is None:
+
+        print("\033[2J\033[H", end="")
+        print_banner()
+        _header(f"Profile · {name}")
+
+        def row(i, text):
+            mark = f"{OR}{BD}›{RS} " if idx == i else "  "
+            print(f"  {mark}{text}")
+
+        sep = f"  {DM}{'─' * 44}{RS}"
+
+        row(0, f"{BD}Apps{RS}   {DM}{app_note}{RS}")
+        print(sep)
+
+        def tab(i, an):
+            is_act = an == active
+            dot = f"{GR}●{RS}" if is_act else f"{DM}○{RS}"
+            txt = f"{GR}{BD}{an}{RS}" if is_act else f"{DM}{an}{RS}"
+            inner = f"{dot} {txt}"
+            return f"{OR}{BD}▸{RS}{inner}{OR}{BD}◂{RS}" if idx == i else f" {inner} "
+        print(f"   {tab(1, a1)}       {tab(2, a2)}")
+        print(f"   {DM}active = green; Enter on a tab makes it active{RS}")
+        print(sep)
+
+        row(3, f"{BD}Buttons{RS}        {DM}{nbtn} set{RS}")
+        row(4, f"{BD}Second layer{RS}   {DM}{nsh} shortcut(s){RS}")
+        row(5, f"{BD}DPI{RS}            {OR}{adpi}{RS}")
+        print(sep)
+        row(6, "Rename profile")
+        row(7, f"{RD}Delete profile{RS}")
+        print(f"\n  {DM}↑↓ move · ←→ switch tab · Enter select · q back{RS}")
+
+        key = _read_key()
+        if key in ("q", "Q", "esc", "\x03"):
             return
-        if choice == 0:
-            _profile_apps(name)
-        elif choice == 1:
-            _buttons_screen(name)
-        elif choice == 2:
-            _layer2_screen(name)
-        elif choice == 3:
-            _variants_screen(name)
-        elif choice == 4:
-            new = _ask("DPI", str(dpi if dpi != "—" else "400"))
-            if new and new.isdigit():
-                prof["dpi"] = int(new)
+        elif key == "up":
+            idx = (idx - 1) % 8
+        elif key == "down":
+            idx = (idx + 1) % 8
+        elif key == "left" and idx == 2:
+            idx = 1
+        elif key == "right" and idx == 1:
+            idx = 2
+        elif key in ("\r", "\n"):
+            if idx == 0:
+                _profile_apps(name)
+            elif idx in (1, 2):
+                prof["active"] = a1 if idx == 1 else a2
                 _save_doc(doc)
-                _offer_reload()
-        elif choice == 5:
-            new = _ask("New name", name)
-            if new and new != name:
-                doc["profile"][new] = dict(prof)
-                del doc["profile"][name]
-                _save_doc(doc)
-                name = new
-        elif choice == 6:
-            if _confirm(f"Delete profile {name!r}?", default=False):
-                del doc["profile"][name]
-                _save_doc(doc)
-                return
+                _apply_now()
+            elif idx == 3:
+                _variant_buttons(name, active)
+            elif idx == 4:
+                _variant_layer2(name, active)
+            elif idx == 5:
+                new = _ask("DPI", str(adpi if adpi != "—" else "400"))
+                if new and new.isdigit():
+                    act["dpi"] = int(new)
+                    _save_doc(doc)
+                    _apply_now()
+            elif idx == 6:
+                new = _ask("New name", name)
+                if new and new != name:
+                    doc["profile"][new] = dict(prof)
+                    del doc["profile"][name]
+                    for p, who in list(doc.get("apps", {}).items()):
+                        if who == name:
+                            doc["apps"][p] = new
+                    _save_doc(doc)
+                    name = new
+            elif idx == 7:
+                if _confirm(f"Delete profile {name!r}?", default=False):
+                    del doc["profile"][name]
+                    for p, who in list(doc.get("apps", {}).items()):
+                        if who == name:
+                            del doc["apps"][p]
+                    _save_doc(doc)
+                    return
 
 
 _PROFILE_META = ("dpi", "layer2", "variants", "active")
@@ -1209,6 +1304,72 @@ def _variant_buttons(name, vn):
                 continue
             _save_doc(doc)
             _offer_reload()
+
+
+def _variant_layer2(name, vn):
+    """Second layer (hold-to-activate shortcuts) for one assignment."""
+    while True:
+        doc = _load_doc()
+        var = doc["profile"][name]["variants"][vn]
+        l2 = var.get("layer2") or {}
+        binds = [(k, str(l2[k])) for k in l2 if k in _BTN_FRIENDLY]
+        trig = next((k for k, v in var.items() if str(v) == "button:6"), None)
+        trig_lbl = "not set" if trig is None else f"button {trig}"
+        labels = [f"{DM}trigger{RS}  {OR}{trig_lbl}{RS} {DM}(hold this){RS}"]
+        for k, v in binds:
+            labels.append(f"{_BTN_FRIENDLY.get(k, k):<20} {DM}→{RS}  {OR}{v}{RS}")
+        labels.append(f"{GR}+ add shortcut{RS}")
+        choice = _select(f"{name}/{vn} · second layer", labels,
+                         intro=["Hold the trigger, then click a button → fires a shortcut."],
+                         footer="↑↓ move · enter select · q back")
+        if choice is None:
+            return
+
+        def _l2(d):
+            v = d["profile"][name]["variants"][vn]
+            if v.get("layer2") is None:
+                v["layer2"] = _tomlkit().table()
+            return v["layer2"]
+
+        if choice == 0:
+            print(f"\n  {DM}Pick the button to HOLD for the second layer.{RS}")
+            _pause("press any key to choose")
+            bidx = _pick_button_index()
+            if bidx:
+                for k in [k for k, v in list(var.items())
+                          if str(v) == "button:6" and str(k) != str(bidx)]:
+                    del var[k]
+                var[bidx] = "button:6"
+                _save_doc(doc)
+                _apply_now()
+        elif 1 <= choice <= len(binds):
+            k, v = binds[choice - 1]
+            what = _select(f"{_BTN_FRIENDLY.get(k, k)}  →  {v}",
+                           ["Change shortcut", f"{RD}Remove{RS}"])
+            if what == 0:
+                combo = _get_combo()
+                if combo:
+                    _l2(doc)[k] = combo
+                    _save_doc(doc)
+                    _apply_now()
+            elif what == 1:
+                if _confirm(f"Remove {_BTN_FRIENDLY.get(k, k)} → {v}?", default=False):
+                    layer = _l2(doc)
+                    if k in layer:
+                        del layer[k]
+                    _save_doc(doc)
+                    _apply_now()
+        elif choice == 1 + len(binds):
+            btn = _pick_btn_name()
+            if not btn:
+                continue
+            print(f"\n  {DM}Set the shortcut for {_BTN_FRIENDLY.get(btn, btn)}.{RS}")
+            combo = _get_combo()
+            if not combo:
+                continue
+            _l2(doc)[btn] = combo
+            _save_doc(doc)
+            _apply_now()
 
 
 # ---- app mappings ----
