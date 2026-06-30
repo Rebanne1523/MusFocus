@@ -106,11 +106,27 @@ def parse_button_action(action):
     return None
 
 
+def effective_profile(pcfg):
+    """Resolve a profile's active variant into a flat config.
+
+    A profile may hold switchable variants under [profile.X.variants.<name>] and
+    a selected one via `active = "<name>"`. The chosen variant's keys override the
+    profile's own; with no/invalid variant the profile is used as-is.
+    """
+    base = {k: v for k, v in pcfg.items() if k not in ("variants", "active")}
+    variants = pcfg.get("variants")
+    active = pcfg.get("active")
+    if variants and active and active in variants:
+        for k, v in variants[active].items():
+            base[k] = v
+    return base
+
+
 def build_first_layer(pcfg):
     """Profile table → {source evdev code: [emit codes]} (identity remaps skipped)."""
     out = {}
     for k, v in pcfg.items():
-        if k in ("dpi", "layer2"):
+        if k in ("dpi", "layer2", "variants", "active"):
             continue
         try:
             idx = int(k)
@@ -154,35 +170,22 @@ def run():
         config = tomllib.load(f)
 
     dev_cfg = config["device"]
-    profiles = config.get("profile", {})
-    global_mod = config.get("modifier", {})   # fallback 2nd layer for profiles w/o layer2
 
     device = find_device(dev_cfg["vendor"], dev_cfg["product"])
     if not device:
         print(f"Device {dev_cfg['vendor']}:{dev_cfg['product']} not found.", file=sys.stderr)
         sys.exit(1)
 
-    # Pre-build software remap tables for every profile (instant to swap between).
-    default_second = build_second_layer(global_mod)
-    first_layers  = {n: build_first_layer(p) for n, p in profiles.items()}
-    second_layers = {n: build_second_layer(p.get("layer2", global_mod))
-                     for n, p in profiles.items()}
-    profile_dpi   = {n: p.get("dpi") for n, p in profiles.items()}
-
-    # Collect every key code any layer can emit so the virtual device can carry them.
-    all_emit_keys = set()
-    for table in list(first_layers.values()) + list(second_layers.values()) + [default_second]:
-        for codes in table.values():
-            all_emit_keys.update(codes)
-
     raw_caps = device.capabilities()
-    # Standard keyboard keys (1-127) and mouse buttons (0x100-0x17F); HIDPP firmware
-    # exports out-of-range codes that would make uinput fail.
+    # Advertise the full keyboard (1-127) plus every mouse-button target, so the
+    # daemon can emit any macro or remap even if the config gains new keys later
+    # (config is re-read live). HIDPP firmware exports out-of-range codes that
+    # would make uinput fail, so the device's own keys are filtered to valid ones.
     VALID_KEY_CODES = set(range(1, 128)) | set(range(0x100, 0x180))
-    btn_codes = [c for c in raw_caps.get(e.EV_KEY, []) if c in VALID_KEY_CODES]
-    for k in all_emit_keys:
-        if k not in btn_codes:
-            btn_codes.append(k)
+    key_codes = {c for c in raw_caps.get(e.EV_KEY, []) if c in VALID_KEY_CODES}
+    key_codes |= set(range(1, 128))
+    key_codes |= set(BTN_NUM_TO_EVDEV.values())
+    btn_codes = sorted(key_codes)
 
     caps = {e.EV_KEY: btn_codes, e.EV_REL: raw_caps.get(e.EV_REL, [])}
     if e.EV_MSC in raw_caps:
@@ -227,10 +230,20 @@ def run():
     active = {}      # source evdev code → emitted codes currently held down
     held = set()     # drag buttons currently down
 
-    state = {"name": None, "first": {}, "second": default_second, "dpi": None}
+    state = {"name": None, "first": {}, "second": {}, "dpi": None, "dpi_target": None}
+    last_config = {"data": config}
+
+    def read_config():
+        # Re-read on every switch so menu edits / variant changes apply live.
+        try:
+            with open(CONFIG_PATH, "rb") as f:
+                last_config["data"] = tomllib.load(f)
+        except Exception:
+            pass   # keep last good config on a transient/partial write
+        return last_config["data"]
 
     def maybe_apply_dpi():
-        target = profile_dpi.get(state["name"])
+        target = state["dpi_target"]
         if target is None or held:        # no DPI set, or defer while dragging
             return
         if state["dpi"] != target:
@@ -238,6 +251,9 @@ def run():
             run_apply("dpi", str(target))
 
     def load_active():
+        cfg = read_config()
+        profiles = cfg.get("profile", {})
+        global_mod = cfg.get("modifier", {})
         try:
             with open(CACHE_FILE) as f:
                 name = f.read().strip()
@@ -245,9 +261,11 @@ def run():
             name = ""
         if name not in profiles:
             name = "default" if "default" in profiles else name
-        state["name"]   = name
-        state["first"]  = first_layers.get(name, {})
-        state["second"] = second_layers.get(name, default_second)
+        eff = effective_profile(profiles.get(name, {}))
+        state["name"]       = name
+        state["first"]      = build_first_layer(eff)
+        state["second"]     = build_second_layer(eff.get("layer2", global_mod))
+        state["dpi_target"] = eff.get("dpi")
         maybe_apply_dpi()
 
     # Set the fixed firmware base once (so physical buttons emit known codes), then

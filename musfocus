@@ -175,13 +175,17 @@ def cmd_list(args):
         dpi = prof.get("dpi")
         print(f"  {OR}{BD}{name}{RS}  {DM}dpi {dpi}{RS}" if dpi else f"  {OR}{BD}{name}{RS}")
         for btn, action in prof.items():
-            if btn in ("dpi", "layer2"):
+            if btn in ("dpi", "layer2", "variants", "active"):
                 continue
             print(f"    {DM}button {btn}{RS}  {DM}→{RS}  {action}")
         layer = prof.get("layer2", global_mod)
         for k, v in layer.items():
             if k.startswith("BTN_"):
                 print(f"    {DM}hold +{RS} {k:<10} {DM}→{RS}  {OR}{v}{RS}")
+        variants = prof.get("variants") or {}
+        if variants:
+            active = prof.get("active") or "base"
+            print(f"    {DM}variants{RS}  {OR}{', '.join(variants)}{RS}  {DM}(active: {active}){RS}")
 
     _header("App mappings")
     apps = config.get("apps", {})
@@ -433,8 +437,11 @@ def _load_doc():
 
 
 def _save_doc(doc):
-    with open(CONFIG_PATH, "w") as f:
+    # Atomic write so the daemon (which re-reads config live) never sees a partial file.
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w") as f:
         f.write(_tomlkit().dumps(doc))
+    os.replace(tmp, CONFIG_PATH)
 
 
 def _pause(msg="press any key to continue"):
@@ -503,10 +510,22 @@ def _select(title, labels, footer="↑↓ move · enter select · q back", intro
             return int(key) - 1
 
 
+def _apply_now():
+    """Nudge the daemon to re-read config and apply edits instantly (no restart)."""
+    try:
+        with open(CACHE_FILE) as f:
+            cur = f.read().strip() or "default"
+    except FileNotFoundError:
+        cur = "default"
+    tmp = CACHE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(cur)
+    os.replace(tmp, CACHE_FILE)
+
+
 def _offer_reload():
-    if _confirm("Reload the modifier daemon now to apply changes?", default=True):
-        cmd_reload(_NS())
-        _pause()
+    # The daemon watches the config and applies changes live — just nudge it.
+    _apply_now()
 
 
 def _action_summary(action):
@@ -806,9 +825,15 @@ def _edit_profile(name):
             layer_note = "shared defaults"
         else:
             layer_note = f"{len([k for k in l2 if k in _BTN_FRIENDLY])} shortcut(s)"
+        variants = prof.get("variants") or {}
+        if variants:
+            var_note = f"{len(variants)} · active: {prof.get('active') or 'base'}"
+        else:
+            var_note = "off"
         choice = _select(f"Profile · {OR}{name}{RS}", [
             f"{BD}Buttons{RS}        {DM}what each button does{RS}",
             f"{BD}Second layer{RS}   {DM}hold + click shortcuts · {layer_note}{RS}",
+            f"{BD}Variants{RS}       {DM}switchable layouts for the same app · {var_note}{RS}",
             f"{BD}DPI{RS}            {OR}{dpi}{RS}",
             f"{DM}Rename{RS}",
             f"{RD}Delete{RS}",
@@ -820,29 +845,35 @@ def _edit_profile(name):
         elif choice == 1:
             _layer2_screen(name)
         elif choice == 2:
+            _variants_screen(name)
+        elif choice == 3:
             new = _ask("DPI", str(dpi if dpi != "—" else "400"))
             if new and new.isdigit():
                 prof["dpi"] = int(new)
                 _save_doc(doc)
-        elif choice == 3:
+                _offer_reload()
+        elif choice == 4:
             new = _ask("New name", name)
             if new and new != name:
                 doc["profile"][new] = dict(prof)
                 del doc["profile"][name]
                 _save_doc(doc)
                 name = new
-        elif choice == 4:
+        elif choice == 5:
             if _confirm(f"Delete profile {name!r}?", default=False):
                 del doc["profile"][name]
                 _save_doc(doc)
                 return
 
 
+_PROFILE_META = ("dpi", "layer2", "variants", "active")
+
+
 def _buttons_screen(name):
     while True:
         doc = _load_doc()
         prof = doc["profile"][name]
-        btn_keys = [k for k in prof.keys() if k not in ("dpi", "layer2")]
+        btn_keys = [k for k in prof.keys() if k not in _PROFILE_META]
         labels = [f"{OR}button {k}{RS}  {DM}→{RS}  {_action_summary(str(prof[k]))}"
                   for k in btn_keys]
         labels.append(f"{GR}+ set a button{RS}")
@@ -952,6 +983,136 @@ def _layer2_screen(name):
             _ensure_layer2(doc, name)[btn] = combo
             _save_doc(doc)
             print(f"\n  {GR}✓{RS} {_BTN_FRIENDLY.get(btn, btn)} {DM}→{RS} {OR}{combo}{RS}")
+            _offer_reload()
+
+
+# ---- variants (switchable layouts within one profile) ----
+
+def _variants_screen(name):
+    while True:
+        doc = _load_doc()
+        prof = doc["profile"][name]
+        variants = prof.get("variants") or {}
+        vnames = list(variants.keys())
+        active = prof.get("active")
+        labels = [f"{(GR + '●' + RS) if active not in vnames else '○'} {DM}Base (profile defaults){RS}"]
+        for vn in vnames:
+            mark = f"{GR}●{RS}" if vn == active else "○"
+            labels.append(f"{mark} {OR}{vn}{RS}")
+        labels.append(f"{GR}+ new variant{RS}")
+        choice = _select(f"{name} · variants", labels, intro=[
+            "Switchable layouts for the same app — e.g. one per in-game mode.",
+            "● = active. Pick one to switch; it applies instantly.",
+        ], footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == 0:
+            if "active" in prof:
+                del prof["active"]
+                _save_doc(doc)
+                _apply_now()
+        elif 1 <= choice <= len(vnames):
+            _variant_actions(name, vnames[choice - 1])
+        elif choice == 1 + len(vnames):
+            _new_variant(name)
+
+
+def _variant_actions(name, vn):
+    doc = _load_doc()
+    prof = doc["profile"][name]
+    is_active = prof.get("active") == vn
+    choice = _select(f"{name} · {vn}", [
+        f"{GR}Use this one{RS}" + (f" {DM}(active){RS}" if is_active else ""),
+        "Edit buttons",
+        f"{DM}Rename{RS}",
+        f"{RD}Delete{RS}",
+    ])
+    if choice is None:
+        return
+    if choice == 0:
+        prof["active"] = vn
+        _save_doc(doc)
+        _apply_now()
+        print(f"\n  {GR}✓{RS} {OR}{vn}{RS} is now active for {name}.")
+        _pause()
+    elif choice == 1:
+        _variant_buttons(name, vn)
+    elif choice == 2:
+        new = _ask("New variant name", vn)
+        if new and new != vn:
+            prof["variants"][new] = dict(prof["variants"][vn])
+            del prof["variants"][vn]
+            if prof.get("active") == vn:
+                prof["active"] = new
+            _save_doc(doc)
+            _apply_now()
+    elif choice == 3:
+        if _confirm(f"Delete variant {vn!r}?", default=False):
+            del prof["variants"][vn]
+            if prof.get("active") == vn:
+                del prof["active"]
+            if not prof["variants"]:
+                del prof["variants"]
+            _save_doc(doc)
+            _apply_now()
+
+
+def _new_variant(name):
+    vn = _ask("New variant name  (e.g. game1)")
+    if not vn:
+        return
+    doc = _load_doc()
+    prof = doc["profile"][name]
+    if prof.get("variants") is None:
+        prof["variants"] = _tomlkit().table()
+    if vn in prof["variants"]:
+        print(f"\n  {RD}Variant {vn!r} already exists.{RS}")
+        _pause()
+        return
+    # Seed from the profile's current buttons so it starts as a copy to tweak.
+    tbl = _tomlkit().table()
+    for k in [k for k in prof.keys() if k not in _PROFILE_META]:
+        tbl[k] = prof[k]
+    prof["variants"][vn] = tbl
+    _save_doc(doc)
+    print(f"\n  {GR}✓{RS} Created variant {OR}{vn}{RS}. {DM}Edit its buttons next.{RS}")
+    _pause()
+    _variant_buttons(name, vn)
+
+
+def _variant_buttons(name, vn):
+    while True:
+        doc = _load_doc()
+        var = doc["profile"][name]["variants"][vn]
+        btn_keys = [k for k in var.keys() if k not in _PROFILE_META]
+        labels = [f"{OR}button {k}{RS}  {DM}→{RS}  {_action_summary(str(var[k]))}"
+                  for k in btn_keys]
+        labels.append(f"{GR}+ set a button{RS}")
+        choice = _select(f"{name}/{vn} · buttons", labels,
+                         intro=["What each button does in this variant."],
+                         footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == len(btn_keys):
+            idx = _pick_button_index()
+            if not idx:
+                continue
+            act = _choose_action()
+            if act in (None, ""):
+                continue
+            var[idx] = act
+            _save_doc(doc)
+            _offer_reload()
+        else:
+            k = btn_keys[choice]
+            act = _choose_action()
+            if act is None:
+                continue
+            if act == "":
+                del var[k]
+            else:
+                var[k] = act
+            _save_doc(doc)
             _offer_reload()
 
 

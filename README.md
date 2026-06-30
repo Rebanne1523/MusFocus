@@ -11,6 +11,7 @@ This application is tailored to help users who want extra features on their mice
 - Per-app button remapping, macros, and DPI (switches automatically when you change windows)
 - **Instant** profile switching — button remaps are done in software.
 - Second layer per profile: hold one button to unlock a second function layer on other buttons (different per app)
+- Profile variants: keep several switchable layouts in one profile (e.g. one per in-game mode) and pick the active one from the menu — handy for a single app like Roblox that runs many different games
 - Friendly interactive menu (`musfocus`) — add/edit profiles, app mappings, shortcuts, and capture key combos by just pressing them
 - Works with any ratbagd-supported mouse (Logitech, Razer, SteelSeries, Roccat, etc.)
 - No config files to edit — set everything up from the menu
@@ -117,6 +118,13 @@ The menu writes everything to `config.toml`, but you can edit it directly with
   fired while the trigger button (`button:6`) is held
 
 Run `musfocus detect` to see your mouse's button indices and evdev names.
+
+**Variants** — a profile can hold several switchable layouts under
+`[profile.X.variants.<name>]`, with `active = "<name>"` choosing the live one. Each
+variant overrides only the keys it lists; the rest fall back to the profile. Switch the
+active variant from the menu (`Profiles → your profile → Variants`) — it applies instantly.
+This lets one app (say Roblox) carry a different layout per in-game mode without making a
+separate profile and app-mapping for each.
 
 <details>
 <summary>Full config.toml example</summary>
