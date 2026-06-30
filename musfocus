@@ -987,14 +987,26 @@ def _edit_profile(name):
         row(0, f"{BD}Apps{RS}   {DM}{app_note}{RS}")
         print(sep)
 
-        def tab(i, an):
-            is_act = an == active
-            dot = f"{GR}●{RS}" if is_act else f"{DM}○{RS}"
-            txt = f"{GR}{BD}{an}{RS}" if is_act else f"{DM}{an}{RS}"
-            inner = f"{dot} {txt}"
-            return f"{OR}{BD}▸{RS}{inner}{OR}{BD}◂{RS}" if idx == i else f" {inner} "
-        print(f"   {tab(1, a1)}       {tab(2, a2)}")
-        print(f"   {DM}active = green; Enter on a tab makes it active{RS}")
+        bw = max(13, len(a1) + 2, len(a2) + 2)
+
+        def box(label, is_active, is_cursor):
+            text = label.center(bw)
+            arrow = f"{OR}{BD}▸{RS}" if is_cursor else " "
+            if is_active:
+                c = GR + BD
+                top = f"{c}█{'█' * bw}█{RS}"
+                mid = f"{c}█{RS}{GR}{BD}{text}{RS}{c}█{RS}"
+                bot = f"{c}█{'█' * bw}█{RS}"
+            else:
+                top = f"{DM}╒{'═' * bw}╕{RS}"
+                mid = f"{DM}│{text}│{RS}"
+                bot = f"{DM}╘{'═' * bw}╛{RS}"
+            return [f"  {top}", f"{arrow} {mid}", f"  {bot}"]
+        b1 = box(a1, active == a1, idx == 1)
+        b2 = box(a2, active == a2, idx == 2)
+        for l, r in zip(b1, b2):
+            print(f"   {l}     {r}")
+        print(f"   {DM}filled green = active · Enter on a box makes it active{RS}")
         print(sep)
 
         row(3, f"{BD}Buttons{RS}        {DM}{nbtn} set{RS}")
