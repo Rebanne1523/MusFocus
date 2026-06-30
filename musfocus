@@ -263,8 +263,8 @@ def cmd_detect(args):
         "BTN_LEFT":    "left click",
         "BTN_RIGHT":   "right click",
         "BTN_MIDDLE":  "middle",
-        "BTN_SIDE":    "back (side)",
-        "BTN_EXTRA":   "forward (extra)",
+        "BTN_SIDE":    "back (thumb, rear)",
+        "BTN_EXTRA":   "front (thumb, front)",
         "BTN_FORWARD": "modifier trigger",
         "BTN_BACK":    "back",
     }
@@ -656,8 +656,8 @@ _MOUSE_FUNCS = [
     ("Left click",   "button:1"),
     ("Right click",  "button:2"),
     ("Middle click", "button:3"),
-    ("Back",         "button:4"),
-    ("Forward",      "button:5"),
+    ("Back  (thumb, rear)",  "button:4"),
+    ("Front (thumb, front)", "button:5"),
 ]
 
 
@@ -694,8 +694,8 @@ _BTN_FRIENDLY = {
     "BTN_LEFT":    "Left click (LMB)",
     "BTN_RIGHT":   "Right click (RMB)",
     "BTN_MIDDLE":  "Middle click",
-    "BTN_SIDE":    "Side button — back",
-    "BTN_EXTRA":   "Side button — forward",
+    "BTN_SIDE":    "Back button (thumb, rear)",
+    "BTN_EXTRA":   "Front button (thumb, front)",
     "BTN_FORWARD": "Modifier / DPI button",
     "BTN_BACK":    "Back",
     "BTN_TASK":    "Task button",

@@ -18,21 +18,24 @@ Also adds a **modifier layer**: hold one button (like the DPI button) to turn ot
 - Linux with KDE Plasma (Wayland or X11) `KDE is a MUST have` for the profile switching to work properly, otherwise JUST the layered macros will work.
 - [ratbagd](https://github.com/libratbag/libratbag) — `sudo systemctl enable --now ratbagd`
 - [FocusNotifier](https://github.com/Rolv-Apneseth/focus-notifier) — KWin script that fires on window changes
-- Python 3.11+ with `python-dbus`, `python-evdev`, `python-gobject`
+- Python 3.11+ with `python-dbus`, `python-evdev`, `python-gobject`, `python-tomlkit`
+
+`install.sh` checks for these and offers to install whatever is missing — you usually
+don't need to do this by hand. To install them yourself:
 
 On Arch/CachyOS:
 ```bash
-sudo pacman -S python-dbus python-evdev python-gobject ratbagd
+sudo pacman -S python-dbus python-evdev python-gobject python-tomlkit ratbagd
 ```
 
 On Ubuntu/Debian:
 ```bash
-sudo apt install python3-dbus python3-evdev python3-gi ratbagd
+sudo apt install python3-dbus python3-evdev python3-gi python3-tomlkit ratbagd
 ```
 
 On Fedora:
 ```bash
-sudo dnf install python3-dbus python3-evdev python3-gobject ratbagd
+sudo dnf install python3-dbus python3-evdev python3-gobject python3-tomlkit ratbagd
 ```
 
 [Piper](https://github.com/libratbag/piper) is optional but useful to visually inspect your mouse's button layout and verify that profiles are applying correctly.
@@ -52,8 +55,7 @@ Then just run:
 musfocus
 ```
 This opens an interactive menu where you can set up everything — profiles, the buttons
-on each profile, which app uses which profile, and the second-layer shortcuts. Optional
-packages for the menu: `python-tomlkit` (so edits keep your config comments).
+on each profile, which app uses which profile, and the second-layer shortcuts.
 
 ## Commands
 
@@ -105,13 +107,13 @@ The same `detect` command prints the button indices ratbagd uses for your mouse,
     [0]  button:1   →  BTN_LEFT        (left click)
     [1]  button:2   →  BTN_RIGHT       (right click)
     [2]  button:3   →  BTN_MIDDLE      (middle)
-    [3]  button:5   →  BTN_EXTRA       (forward (extra))
-    [4]  button:4   →  BTN_SIDE        (back (side))
+    [3]  button:5   →  BTN_EXTRA       (front (front thumb))
+    [4]  button:4   →  BTN_SIDE        (back (rear thumb))
     [5]  button:6   →  BTN_FORWARD     (modifier trigger)
 
 ```
 
-The number in brackets (0, 1, 3, 4, 5...) is the **button index** you use in profiles. The evdev name is what you use in the `[modifier]` section, the number next to "button" modifier button that you will use for the layering modifier function.
+The number in brackets (0, 1, 3, 4, 5...) is the **button index** you use in profiles. The evdev name (`BTN_SIDE`, `BTN_EXTRA`, ...) is what you use in a profile's second layer (`[profile.X.layer2]`).
 
 ### Step 3 — Add app profiles
 
@@ -155,9 +157,9 @@ dpi = 800
 - `button:1` = left click
 - `button:2` = right click
 - `button:3` = middle click
-- `button:4` = back
-- `button:5` = forward
-- `button:6` = required for the modifier button (see below)
+- `button:4` = back (rear thumb button)
+- `button:5` = front (front thumb button)
+- `button:6` = required for the modifier/trigger button (see below)
 
 ### The second layer (per profile)
 
@@ -202,8 +204,8 @@ product = "4074"
 
 [profile.default]
 dpi = 1600
-3 = "button:5"      # physical back button -> forward
-4 = "button:4"      # physical forward button -> back
+3 = "button:5"      # rear thumb button  → acts as front
+4 = "button:4"      # front thumb button → acts as back
 5 = "button:6"      # trigger button (required in every profile)
 
 [profile.default.layer2]

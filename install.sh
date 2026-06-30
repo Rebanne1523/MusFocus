@@ -10,37 +10,35 @@ LISTENER_SHIM="$HOME/.config/musfocus-listener.sh"
 echo "=== musfocus installer ==="
 echo
 
-# 0. Check Python dependencies
+# 0. Check & install Python dependencies.
+#    (tomlkit powers the interactive menu's config editor.)
 MISSING=""
-python3 -c "import dbus"              2>/dev/null || MISSING="$MISSING python-dbus"
-python3 -c "import evdev"             2>/dev/null || MISSING="$MISSING python-evdev"
-python3 -c "from gi.repository import Gio" 2>/dev/null || MISSING="$MISSING python-gobject"
+python3 -c "import dbus"                    2>/dev/null || MISSING="$MISSING python-dbus"
+python3 -c "import evdev"                   2>/dev/null || MISSING="$MISSING python-evdev"
+python3 -c "from gi.repository import Gio"  2>/dev/null || MISSING="$MISSING python-gobject"
+python3 -c "import tomlkit"                 2>/dev/null || MISSING="$MISSING python-tomlkit"
 if [ -n "$MISSING" ]; then
     echo "[!] Missing Python packages:$MISSING"
     if command -v pacman &>/dev/null; then
-        echo "    Run: sudo pacman -S$MISSING"
+        CMD="sudo pacman -S --needed$MISSING"
     elif command -v apt-get &>/dev/null; then
-        echo "    Run: sudo apt-get install$(echo "$MISSING" | sed 's/python-/python3-/g')"
+        CMD="sudo apt-get install$(echo "$MISSING" | sed 's/python-/python3-/g')"
     elif command -v dnf &>/dev/null; then
-        echo "    Run: sudo dnf install$(echo "$MISSING" | sed 's/python-/python3-/g')"
+        CMD="sudo dnf install$(echo "$MISSING" | sed 's/python-/python3-/g')"
+    else
+        CMD=""
+    fi
+    if [ -n "$CMD" ]; then
+        echo "    $CMD"
+        read -rp "    Install these now? [Y/n] " ans
+        case "$ans" in
+            [Nn]*) echo "    Install them, then re-run install.sh." ; exit 1 ;;
+            *)     eval "$CMD" || { echo "[!] Install failed — run it manually, then re-run." ; exit 1 ; } ;;
+        esac
     else
         echo "    Install via your package manager, then re-run install.sh."
+        exit 1
     fi
-    exit 1
-fi
-
-# 0b. Optional: tomlkit powers the interactive config editor (musfocus menu).
-#     Not required for the daemon — warn but don't block.
-if ! python3 -c "import tomlkit" 2>/dev/null; then
-    echo "[i] Optional: install 'python-tomlkit' to edit profiles from the menu"
-    if command -v pacman &>/dev/null; then
-        echo "    Run: sudo pacman -S python-tomlkit"
-    elif command -v apt-get &>/dev/null; then
-        echo "    Run: sudo apt-get install python3-tomlkit"
-    elif command -v dnf &>/dev/null; then
-        echo "    Run: sudo dnf install python3-tomlkit"
-    fi
-    echo
 fi
 
 # 1. Config

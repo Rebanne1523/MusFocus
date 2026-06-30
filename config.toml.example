@@ -1,21 +1,12 @@
 # musfocus configuration example
 # Copy this file to config.toml and edit it for your setup.
+# The easy way is the interactive menu: just run `musfocus`.
 # Run `musfocus detect` to find your device's IDs and button indices.
 
 [device]
-# Run `lsusb` and look for your mouse. "ID 046d:4074" → vendor="046d", product="4074"
+# Run `musfocus detect` (Input device VID:PIDs). "046d:4074" → vendor/product below.
 vendor  = "046d"
 product = "4074"
-
-[modifier]
-# ratbagd button index to use as modifier (held down to activate shortcuts).
-# Must also be remapped to "button:6" in your profiles so the daemon detects it.
-button = 5
-
-# evdev button name = keyboard shortcut to fire when modifier is held
-BTN_SIDE  = "Ctrl+C"
-BTN_EXTRA = "Ctrl+V"
-BTN_RIGHT = "Super+F"
 
 [apps]
 # window class pattern = profile name
@@ -26,12 +17,19 @@ BTN_RIGHT = "Super+F"
 
 [profile.default]
 # dpi = N        → set DPI when this profile activates (optional)
-# "button:N"     → send mouse button event (4=back, 5=forward, 6=BTN_FORWARD)
-# "key:Shortcut" → send keyboard macro
+# "button:N"     → send a mouse button (1=left 2=right 3=middle 4=back 5=front 6=trigger)
+# "key:Shortcut" → send a keyboard macro, e.g. "key:Ctrl+B"
 dpi = 1600
-3 = "button:5"
-4 = "button:4"
-5 = "button:6"
+3 = "button:5"     # physical back (rear thumb) button → acts as front
+4 = "button:4"     # physical front (front thumb) button → acts as back
+5 = "button:6"     # the trigger button (hold it for the second layer)
+
+# Second layer: hold the trigger button, then click these → fire a shortcut.
+# This is per-profile, so it can differ per app.
+[profile.default.layer2]
+BTN_SIDE  = "Ctrl+C"   # hold trigger + back (rear) thumb  → Ctrl+C
+BTN_EXTRA = "Ctrl+V"   # hold trigger + front thumb        → Ctrl+V
+BTN_RIGHT = "Super+F"  # hold trigger + right click        → Super+F
 
 [profile.davinci]
 dpi = 800
@@ -39,8 +37,19 @@ dpi = 800
 4 = "key:Ctrl+B"
 5 = "button:6"
 
+[profile.davinci.layer2]
+BTN_SIDE  = "Ctrl+B"
+BTN_EXTRA = "Backspace"
+
 # [profile.blender]
 # dpi = 1200
 # 3 = "key:Escape"
 # 4 = "key:Space"
 # 5 = "button:6"
+
+# Optional legacy fallback: a global [modifier] table is still honored for any
+# profile that doesn't define its own [profile.X.layer2].
+# [modifier]
+# button    = 5
+# BTN_SIDE  = "Ctrl+C"
+# BTN_EXTRA = "Ctrl+V"
