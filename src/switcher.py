@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""FocusNotifier listener: switches mouse profile based on the active window class."""
-import sys, os, fcntl, fnmatch, subprocess, tomllib
+"""FocusNotifier listener: records the wanted mouse profile for the active window.
+
+It only writes the profile name to the cache file. The daemon watches that file and
+swaps its software remap tables instantly (and applies DPI if it changed), so there's
+no firmware commit here and switching never interrupts a drag.
+"""
+import sys, os, fcntl, fnmatch, tomllib
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_DIR, "config.toml")
-APPLY_PY    = os.path.join(PROJECT_DIR, "src", "apply.py")
 CACHE_FILE  = "/tmp/musfocus-cache"
 LOCK_FILE   = "/tmp/musfocus.lock"
 WCLASS_FILE = "/tmp/FocusNotifier/wclass.txt"
@@ -44,10 +48,11 @@ def main():
     except FileNotFoundError:
         pass
 
-    result = subprocess.run([sys.executable, APPLY_PY, profile])
-    if result.returncode == 0:
-        with open(CACHE_FILE, "w") as f:
-            f.write(profile)
+    # Atomically update the cache; the daemon picks it up and swaps instantly.
+    tmp = CACHE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(profile)
+    os.replace(tmp, CACHE_FILE)
 
 
 if __name__ == "__main__":

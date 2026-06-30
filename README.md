@@ -7,9 +7,10 @@ Also adds a **modifier layer**: hold one button (like the DPI button) to turn ot
 ## Features
 
 - Per-app button remapping, macros, and DPI (switches automatically when you change windows)
-- Modifier layer: hold one button to unlock a second set of actions on other buttons
+- **Instant** profile switching — button remaps are done in software, so there's no firmware write to wait for and dragging across windows never glitches
+- Second layer per profile: hold one button to unlock a different set of actions on other buttons (different per app)
+- Friendly interactive menu (`musfocus`) — add/edit profiles, app mappings, shortcuts, and capture key combos by just pressing them
 - Works with any ratbagd-supported mouse (Logitech, Razer, SteelSeries, Roccat, etc.)
-- Near-instant switching (~30ms) with background hardware write
 - One config file — no Python knowledge needed
 
 ## Requirements
@@ -39,28 +40,35 @@ sudo dnf install python3-dbus python3-evdev python3-gobject ratbagd
 ## Installation
 
 ```bash
-git clone https://github.com/yourname/musfocus
+git clone https://github.com/Rebanne1523/MusFocus.git
 cd musfocus
 bash install.sh
 ```
 
 The installer checks for missing dependencies and tells you what to install if anything is missing.
 
-Then open the config:
+Then just run:
 ```bash
-musfocus config
+musfocus
 ```
+This opens an interactive menu where you can set up everything — profiles, the buttons
+on each profile, which app uses which profile, and the second-layer shortcuts. Optional
+packages for the menu: `python-tomlkit` (so edits keep your config comments).
 
 ## Commands
 
+The interactive menu (`musfocus` with no arguments) is the easy way in. These subcommands
+also exist for scripting:
+
 ```
-musfocus config              # open config.toml in your editor
+musfocus                     # interactive menu (profiles, mappings, shortcuts, device)
 musfocus status              # current profile, service state, device info
 musfocus list                # show all profiles, app mappings, shortcuts
-musfocus apply <profile>     # apply a profile right now (e.g. "default")
+musfocus apply <profile>     # switch to a profile right now (e.g. "default")
 musfocus reload              # restart background service after config changes
 musfocus detect              # find your mouse's VID:PID and button indices
 musfocus detect --window     # show the current window's class name
+musfocus config              # open config.toml in your editor
 ```
 
 ## Configuration
@@ -151,26 +159,36 @@ dpi = 800
 - `button:5` = forward
 - `button:6` = required for the modifier button (see below)
 
-### The modifier layer
+### The second layer (per profile)
 
-Think of it like a second layer on your mouse, activated by holding one button. While you hold the modifier button, other buttons fire keyboard shortcuts instead of their normal actions. Release it and everything goes back to normal — similar to how Shift works on a keyboard.
+Think of it like a second layer on your mouse, activated by holding one button (the
+trigger). While you hold it, other buttons fire keyboard shortcuts instead of their
+normal actions. Release it and everything goes back to normal — like Shift on a keyboard.
+
+The second layer is **per profile**, so the same hold-and-click can do different things in
+different apps. It lives in a `[profile.X.layer2]` table:
 
 ```toml
-[modifier]
-button    = 5           # button INDEX to hold to activate the layer
-BTN_SIDE  = "Ctrl+C"   # while holding: side button fires Ctrl+C
-BTN_EXTRA = "Ctrl+V"   # while holding: extra button fires Ctrl+V
-BTN_RIGHT = "Super+F"  # while holding: right click fires Super+F
+[profile.davinci.layer2]
+BTN_SIDE  = "Ctrl+B"      # while holding the trigger: side button → Ctrl+B
+BTN_EXTRA = "Backspace"   # while holding the trigger: extra button → Backspace
 ```
 
-`button = 5` is the index of the button you hold. The names (`BTN_SIDE`, `BTN_EXTRA`, `BTN_RIGHT`) are the evdev names shown by `musfocus detect`.
+The names (`BTN_SIDE`, `BTN_EXTRA`, `BTN_RIGHT`) are the evdev names shown by
+`musfocus detect`. The easiest way to set these is the interactive menu
+(`musfocus` → Profiles → your profile → Second layer), which lets you **capture** a
+shortcut by just pressing the keys.
 
-**One required step:** the modifier button must be set to `"button:6"` or the corresponding button in every profile. This makes the button's press visible to the background service — without this, some mice handle the button entirely in firmware and the OS never receives the event.
+**The trigger button:** one button in each profile must be set to `"button:6"`. Holding
+that button is what activates the second layer. Without it, some mice handle the button
+entirely in firmware and the OS never sees the press.
 
-So if your modifier button has index 5, every profile needs this line:
 ```toml
-5 = "button:6"
+5 = "button:6"    # the DPI button (index 5) is the trigger
 ```
+
+A legacy global `[modifier]` table is still supported as a fallback for any profile that
+doesn't define its own `[profile.X.layer2]`.
 
 ### Full example
 
@@ -179,12 +197,6 @@ So if your modifier button has index 5, every profile needs this line:
 vendor  = "046d"
 product = "4074"
 
-[modifier]
-button    = 5
-BTN_SIDE  = "Ctrl+C"
-BTN_EXTRA = "Ctrl+V"
-BTN_RIGHT = "Super+F"
-
 [apps]
 "*resolve*|*davinci*" = "davinci"
 
@@ -192,28 +204,47 @@ BTN_RIGHT = "Super+F"
 dpi = 1600
 3 = "button:5"      # physical back button -> forward
 4 = "button:4"      # physical forward button -> back
-5 = "button:6"      # modifier button (required in every profile)
+5 = "button:6"      # trigger button (required in every profile)
+
+[profile.default.layer2]
+BTN_SIDE  = "Ctrl+C"   # hold trigger + side  → Ctrl+C
+BTN_EXTRA = "Ctrl+V"   # hold trigger + extra → Ctrl+V
 
 [profile.davinci]
 dpi = 800
 3 = "key:Backspace"
 4 = "key:Ctrl+B"
 5 = "button:6"
+
+[profile.davinci.layer2]
+BTN_SIDE  = "Ctrl+B"
+BTN_EXTRA = "Backspace"
 ```
 
 ## How It Works
 
-**Profile switching** — FocusNotifier notifies MusFocus whenever you switch windows. It matches the window class against the `[apps]` patterns and calls the ratbagd DBus API to rewrite button mappings and DPI in a single session. A cache file prevents redundant writes (and mouse drag interruptions).
+**One background daemon does everything** (`src/daemon.py`). It grabs your mouse and creates
+a virtual copy with the same hardware ID (so KDE's pointer acceleration still applies), then
+remaps every button **in software** in real time — both the per-app profile and the
+hold-to-activate second layer.
 
-**Modifier daemon** — A background service (`src/daemon.py`) grabs your mouse and creates a virtual copy with the same hardware ID, so KDE's pointer acceleration settings still apply. It intercepts events in real time: when the modifier button is held, configured buttons fire keyboard shortcuts; everything else passes through unchanged.
+**Profile switching is instant.** FocusNotifier notifies MusFocus on window changes; it
+matches the window class against `[apps]` and writes the profile name to a small cache file.
+The daemon watches that file and swaps its in-memory remap tables — no firmware write, so the
+switch is immediate and dragging across windows never glitches.
+
+**The firmware is set once** to a fixed "identity" base (button index *i* emits button *i+1*)
+so the daemon can tell which physical button you pressed. The only thing still written to the
+device is **DPI**, and only when it actually changes between profiles (done in the background,
+and deferred while you're mid-drag).
 
 ## Adding a New Mouse
 
 1. Run `musfocus detect` to find the VID:PID and button indices
-2. Update `[device]`, the profile button indices, and `[modifier].button` in config.toml
+2. In the menu (`musfocus` → Configuration → Device) pick your mouse, then set up profiles
 3. Run `musfocus reload`
 
-If your mouse is not in ratbagd's device database, the per-app profile switching won't work — but the modifier layer still works for any USB mouse with side buttons. You just need its VID:PID from `musfocus detect`.
+The trigger that activates the second layer is the button mapped to `"button:6"` (the DPI button on most mice). If your mouse is not in ratbagd's device database, per-app switching won't work, but the second layer still works for any USB mouse with extra buttons — you just need its VID:PID from `musfocus detect`.
 
 ## Uninstall
 

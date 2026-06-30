@@ -1,15 +1,34 @@
 #!/usr/bin/env python3
 """
-Modifier daemon: grabs the configured mouse, creates a virtual clone with the same
-VID:PID (so kcminputrc acceleration settings apply), and intercepts side button clicks
-while the DPI button is held to fire configurable keyboard shortcuts.
+musfocus daemon: grabs the configured mouse, creates a virtual clone with the same
+VID:PID (so kcminputrc acceleration settings apply), and does ALL button remapping in
+software — both the per-app profile (first layer) and the hold-to-activate shortcuts
+(second layer). Because remapping is software, switching profiles is instant: no
+ratbagd firmware commit is needed (only DPI, when it actually changes, still uses it).
+
+The mouse firmware is set once to a fixed "identity" base (button index i emits button
+i+1) so the daemon can tell which physical button was pressed; everything else is then
+remapped here.
 """
 import evdev
 from evdev import UInput, ecodes as e
-import sys, os, tomllib
+import sys, os, tomllib, subprocess, threading, select
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_DIR, "config.toml")
+APPLY_PY    = os.path.join(PROJECT_DIR, "src", "apply.py")
+CACHE_FILE  = "/tmp/musfocus-cache"
+
+# Buttons whose hold means "a drag may be in progress" → defer the (rare) DPI commit.
+DRAG_BTNS = {e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE}
+
+# ratbag button number → evdev code. The fixed base maps physical index i to button i+1.
+BTN_NUM_TO_EVDEV = {
+    1: e.BTN_LEFT, 2: e.BTN_RIGHT, 3: e.BTN_MIDDLE, 4: e.BTN_SIDE,
+    5: e.BTN_EXTRA, 6: e.BTN_FORWARD, 7: e.BTN_BACK, 8: e.BTN_TASK,
+}
+# The trigger (modifier) is button 6 → BTN_FORWARD. Holding it activates the 2nd layer.
+MODIFIER_EVDEV = e.BTN_FORWARD
 
 KEY_NAME_MAP = {
     "ctrl": e.KEY_LEFTCTRL,   "leftctrl": e.KEY_LEFTCTRL,   "rightctrl": e.KEY_RIGHTCTRL,
@@ -61,6 +80,61 @@ def parse_shortcut(shortcut_str):
     return [KEY_NAME_MAP[p] for p in parts if p in KEY_NAME_MAP]
 
 
+def base_code(index):
+    """Evdev code a physical button emits under the fixed identity base."""
+    return BTN_NUM_TO_EVDEV.get(index + 1)
+
+
+def parse_button_action(action):
+    """Profile action string → list of evdev codes to emit, or None to pass through.
+
+    'button:N' → [evdev code for button N]   (None for the trigger, button:6)
+    'key:Combo' → [key codes]
+    """
+    action = str(action)
+    if action.startswith("button:"):
+        try:
+            n = int(action.split(":", 1)[1])
+        except ValueError:
+            return None
+        if n == 6:                       # the modifier trigger isn't a first-layer emit
+            return None
+        code = BTN_NUM_TO_EVDEV.get(n)
+        return [code] if code is not None else None
+    if action.startswith("key:"):
+        return parse_shortcut(action.split(":", 1)[1])
+    return None
+
+
+def build_first_layer(pcfg):
+    """Profile table → {source evdev code: [emit codes]} (identity remaps skipped)."""
+    out = {}
+    for k, v in pcfg.items():
+        if k in ("dpi", "layer2"):
+            continue
+        try:
+            idx = int(k)
+        except (ValueError, TypeError):
+            continue
+        src = base_code(idx)
+        codes = parse_button_action(v)
+        if src is None or not codes:
+            continue
+        if codes == [src]:               # identity → just pass through
+            continue
+        out[src] = codes
+    return out
+
+
+def build_second_layer(section):
+    """Layer-2 table → {source evdev code: [key codes]}."""
+    out = {}
+    for name, shortcut in section.items():
+        if name in BTN_NAME_MAP:
+            out[BTN_NAME_MAP[name]] = parse_shortcut(shortcut)
+    return out
+
+
 def find_device(vendor_hex, product_hex):
     vendor  = int(vendor_hex, 16)
     product = int(product_hex, 16)
@@ -80,33 +154,33 @@ def run():
         config = tomllib.load(f)
 
     dev_cfg = config["device"]
-    mod_cfg = config["modifier"]
+    profiles = config.get("profile", {})
+    global_mod = config.get("modifier", {})   # fallback 2nd layer for profiles w/o layer2
 
     device = find_device(dev_cfg["vendor"], dev_cfg["product"])
     if not device:
         print(f"Device {dev_cfg['vendor']}:{dev_cfg['product']} not found.", file=sys.stderr)
         sys.exit(1)
 
-    # The DPI button is remapped to "button:6" (BTN_FORWARD) in all profiles.
-    modifier_evdev = e.BTN_FORWARD
+    # Pre-build software remap tables for every profile (instant to swap between).
+    default_second = build_second_layer(global_mod)
+    first_layers  = {n: build_first_layer(p) for n, p in profiles.items()}
+    second_layers = {n: build_second_layer(p.get("layer2", global_mod))
+                     for n, p in profiles.items()}
+    profile_dpi   = {n: p.get("dpi") for n, p in profiles.items()}
 
-    # Parse bindings: evdev BTN_NAME → list of key codes to press/release
-    bindings = {}
-    all_extra_keys = set()
-    for btn_name, shortcut in mod_cfg.items():
-        if btn_name == "button" or btn_name not in BTN_NAME_MAP:
-            continue
-        keys = parse_shortcut(shortcut)
-        bindings[BTN_NAME_MAP[btn_name]] = keys
-        all_extra_keys.update(keys)
+    # Collect every key code any layer can emit so the virtual device can carry them.
+    all_emit_keys = set()
+    for table in list(first_layers.values()) + list(second_layers.values()) + [default_second]:
+        for codes in table.values():
+            all_emit_keys.update(codes)
 
     raw_caps = device.capabilities()
-    # Include standard keyboard keys (1-127) and mouse buttons (0x100-0x17F).
-    # HIDPP firmware exports codes outside these ranges that cause uinput errors.
-    # Keyboard range is required so hardware macros set by ratbagd can pass through.
+    # Standard keyboard keys (1-127) and mouse buttons (0x100-0x17F); HIDPP firmware
+    # exports out-of-range codes that would make uinput fail.
     VALID_KEY_CODES = set(range(1, 128)) | set(range(0x100, 0x180))
     btn_codes = [c for c in raw_caps.get(e.EV_KEY, []) if c in VALID_KEY_CODES]
-    for k in all_extra_keys:
+    for k in all_emit_keys:
         if k not in btn_codes:
             btn_codes.append(k)
 
@@ -114,7 +188,6 @@ def run():
     if e.EV_MSC in raw_caps:
         caps[e.EV_MSC] = raw_caps[e.EV_MSC]
 
-    # Virtual device with identical VID:PID:name so kcminputrc settings apply
     ui = UInput(
         caps,
         name=device.name,
@@ -127,41 +200,135 @@ def run():
     device.grab()
     print(f"Grabbed {device.path} ({device.name}), virtual device ready", flush=True)
 
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def press(codes):
+        for k in [c for c in codes if c in MODIFIER_CODES]:
+            ui.write(e.EV_KEY, k, 1)
+        for k in [c for c in codes if c not in MODIFIER_CODES]:
+            ui.write(e.EV_KEY, k, 1)
+        ui.syn()
+
+    def release(codes):
+        for k in reversed([c for c in codes if c not in MODIFIER_CODES]):
+            ui.write(e.EV_KEY, k, 0)
+        for k in reversed([c for c in codes if c in MODIFIER_CODES]):
+            ui.write(e.EV_KEY, k, 0)
+        ui.syn()
+
+    def run_apply(*args):
+        def work():
+            try:
+                subprocess.run([sys.executable, APPLY_PY, *args], timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
     modifier_held = False
-    active = {}  # btn_code → keys list currently held
+    active = {}      # source evdev code → emitted codes currently held down
+    held = set()     # drag buttons currently down
+
+    state = {"name": None, "first": {}, "second": default_second, "dpi": None}
+
+    def maybe_apply_dpi():
+        target = profile_dpi.get(state["name"])
+        if target is None or held:        # no DPI set, or defer while dragging
+            return
+        if state["dpi"] != target:
+            state["dpi"] = target
+            run_apply("dpi", str(target))
+
+    def load_active():
+        try:
+            with open(CACHE_FILE) as f:
+                name = f.read().strip()
+        except OSError:
+            name = ""
+        if name not in profiles:
+            name = "default" if "default" in profiles else name
+        state["name"]   = name
+        state["first"]  = first_layers.get(name, {})
+        state["second"] = second_layers.get(name, default_second)
+        maybe_apply_dpi()
+
+    # Set the fixed firmware base once (so physical buttons emit known codes), then
+    # load the active profile's software tables.
+    run_apply("base")
+    load_active()
+
+    def cache_mtime():
+        try:
+            return os.stat(CACHE_FILE).st_mtime
+        except OSError:
+            return 0.0
+    last_mtime = cache_mtime()
 
     try:
-        for event in device.read_loop():
-            if event.type == e.EV_KEY:
+        while True:
+            r, _, _ = select.select([device.fd], [], [], 0.1)
+
+            # Profile changed? Swap software tables instantly (no firmware commit).
+            m = cache_mtime()
+            if m != last_mtime:
+                last_mtime = m
+                load_active()
+
+            if not r:
+                continue
+            try:
+                events = list(device.read())
+            except BlockingIOError:
+                continue
+
+            for event in events:
+                if event.type != e.EV_KEY:
+                    ui.write_event(event)
+                    ui.syn()
+                    continue
+
                 code, val = event.code, event.value
 
-                if code == modifier_evdev:
-                    modifier_held = (val == 1)
+                if code == MODIFIER_EVDEV:
+                    # The trigger autorepeats (val==2) while held; only val==0 releases.
+                    modifier_held = (val != 0)
                     continue
 
-                if code in bindings and (modifier_held or code in active):
-                    keys = bindings[code]
-                    mods  = [k for k in keys if k in MODIFIER_CODES]
-                    plain = [k for k in keys if k not in MODIFIER_CODES]
-
-                    if val == 1 and modifier_held:
-                        active[code] = keys
-                        for k in mods:
-                            ui.write(e.EV_KEY, k, 1)
-                        for k in plain:
-                            ui.write(e.EV_KEY, k, 1)
-                        ui.syn()
-                    elif val == 0 and code in active:
-                        active.pop(code)
-                        for k in reversed(plain):
-                            ui.write(e.EV_KEY, k, 0)
-                        for k in reversed(mods):
-                            ui.write(e.EV_KEY, k, 0)
-                        ui.syn()
+                # Release an in-flight remap, even if the profile changed meanwhile.
+                if val == 0 and code in active:
+                    release(active.pop(code))
+                    if code in DRAG_BTNS:
+                        held.discard(code)
+                        if not held:
+                            maybe_apply_dpi()
+                    continue
+                # Swallow autorepeat of a button whose remap is already held.
+                if code in active:
                     continue
 
-            ui.write_event(event)
-            ui.syn()
+                # Pick the effective binding: 2nd layer wins while the trigger is held.
+                binding = None
+                if modifier_held and code in state["second"]:
+                    binding = state["second"][code]
+                elif code in state["first"]:
+                    binding = state["first"][code]
+
+                if binding is not None:
+                    if val == 1:
+                        active[code] = binding
+                        press(binding)
+                        if code in DRAG_BTNS:
+                            held.add(code)
+                    continue
+
+                # Pass through unmapped buttons; track drags to defer DPI commits.
+                if code in DRAG_BTNS:
+                    if val == 1:
+                        held.add(code)
+                    elif val == 0:
+                        held.discard(code)
+                        if not held:
+                            maybe_apply_dpi()
+                ui.write_event(event)
+                ui.syn()
 
     except (KeyboardInterrupt, OSError):
         pass

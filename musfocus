@@ -28,6 +28,105 @@ def _header(title):
     print(f"{DM}{'─' * (len(title) + 2)}{RS}")
 
 
+# ── Banner ───────────────────────────────────────────────────────────────────
+# Generated with figlet font "ansi_shadow"; embedded so there's no runtime dep.
+_BANNER_LARGE = [
+    "███╗   ███╗██╗   ██╗███████╗███████╗ ██████╗  ██████╗██╗   ██╗███████╗",
+    "████╗ ████║██║   ██║██╔════╝██╔════╝██╔═══██╗██╔════╝██║   ██║██╔════╝",
+    "██╔████╔██║██║   ██║███████╗█████╗  ██║   ██║██║     ██║   ██║███████╗",
+    "██║╚██╔╝██║██║   ██║╚════██║██╔══╝  ██║   ██║██║     ██║   ██║╚════██║",
+    "██║ ╚═╝ ██║╚██████╔╝███████║██║     ╚██████╔╝╚██████╗╚██████╔╝███████║",
+    "╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝      ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝",
+]
+# Per-line orange gradient (light amber → deep orange) for the large banner.
+_GRAD = [_c(f"\033[38;5;{n}m") for n in (214, 214, 208, 208, 202, 166)]
+
+_TAGLINE = "per-app mouse profile switcher"
+
+
+def _term_width(default=80):
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return default
+
+
+def print_banner():
+    """Orange banner shown at the top of every command."""
+    if not _TTY:
+        print("musfocus — " + _TAGLINE)
+        return
+
+    if _term_width() >= 72:
+        print()
+        for grad, line in zip(_GRAD, _BANNER_LARGE):
+            print(f"{grad}{line}{RS}")
+        # fastfetch-style colour swatch + tagline under the logo.
+        dots = "".join(_c(f"\033[38;5;{n}m") + "▄▄" for n in (214, 208, 202, 166)) + RS
+        print(f"  {dots}  {DM}{_TAGLINE}{RS}")
+    else:
+        # Compact one-liner for narrow terminals.
+        print()
+        print(f"{OR}{BD}▌ musfocus ▐{RS}  {DM}{_TAGLINE}{RS}")
+        print(f"{DM}{'─' * min(_term_width(), 46)}{RS}")
+
+
+class Spinner:
+    """A playful orange 'scanner' animation shown while slow work runs.
+
+    Usage:
+        with Spinner("Scanning devices"):
+            slow_work()
+    Falls back to a single static line when stdout isn't a TTY.
+    """
+    DOTS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, label, width=14):
+        self.label = label
+        self.width = width
+        import threading
+        self._stop = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        if not _TTY:
+            print(f"  {self.label}...", flush=True)
+            return self
+        import threading
+        sys.stdout.write("\033[?25l")  # hide cursor
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self):
+        import time
+        span = 2 * (self.width - 1)
+        i = 0
+        while not self._stop.is_set():
+            dot = self.DOTS[i % len(self.DOTS)]
+            pos = i % span
+            if pos >= self.width:
+                pos = span - pos                     # bounce back
+            track = "".join(
+                f"{OR}█{RS}" if j == pos else f"{DM}·{RS}"
+                for j in range(self.width)
+            )
+            sys.stdout.write(f"\r  {OR}{BD}{dot}{RS} {self.label} {OR2}❮{RS}{track}{OR2}❯{RS} ")
+            sys.stdout.flush()
+            time.sleep(0.07)
+            i += 1
+
+    def __exit__(self, *exc):
+        if not _TTY:
+            return False
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        sys.stdout.write("\r\033[K\033[?25h")        # clear line, restore cursor
+        sys.stdout.flush()
+        return False
+
+
 def load_config():
     try:
         with open(CONFIG_PATH, "rb") as f:
@@ -69,11 +168,20 @@ def cmd_status(args):
 def cmd_list(args):
     config = load_config()
 
+    global_mod = config.get("modifier", {})
+
     _header("Profiles")
-    for name, buttons in config.get("profile", {}).items():
-        print(f"  {OR}{BD}{name}{RS}")
-        for btn, action in buttons.items():
+    for name, prof in config.get("profile", {}).items():
+        dpi = prof.get("dpi")
+        print(f"  {OR}{BD}{name}{RS}  {DM}dpi {dpi}{RS}" if dpi else f"  {OR}{BD}{name}{RS}")
+        for btn, action in prof.items():
+            if btn in ("dpi", "layer2"):
+                continue
             print(f"    {DM}button {btn}{RS}  {DM}→{RS}  {action}")
+        layer = prof.get("layer2", global_mod)
+        for k, v in layer.items():
+            if k.startswith("BTN_"):
+                print(f"    {DM}hold +{RS} {k:<10} {DM}→{RS}  {OR}{v}{RS}")
 
     _header("App mappings")
     apps = config.get("apps", {})
@@ -82,24 +190,21 @@ def cmd_list(args):
             print(f"  {DM}{pattern!r}{RS}  {DM}→{RS}  {OR}{profile}{RS}")
     else:
         print(f"  {DM}(none — all apps use 'default' profile){RS}")
-
-    _header(f"Modifier layer  {DM}hold DPI button + click{RS}")
-    mod = config.get("modifier", {})
-    for key, val in mod.items():
-        if key != "button":
-            print(f"  {BD}{key:<12}{RS}  {DM}→{RS}  {OR}{val}{RS}")
     print()
 
 
 def cmd_apply(args):
-    apply_py = os.path.join(SRC_DIR, "apply.py")
-    result = subprocess.run([sys.executable, apply_py, args.profile])
-    if result.returncode == 0:
-        with open(CACHE_FILE, "w") as f:
-            f.write(args.profile)
-        print(f"{GR}✓{RS} Profile applied: {OR}{BD}{args.profile}{RS}")
-    else:
-        sys.exit(result.returncode)
+    config = load_config()
+    if args.profile not in config.get("profile", {}):
+        print(f"{RD}Unknown profile:{RS} {args.profile}", file=sys.stderr)
+        print(f"  Available: {', '.join(config.get('profile', {}))}", file=sys.stderr)
+        sys.exit(1)
+    # The daemon watches this file and swaps its software remap instantly.
+    tmp = CACHE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(args.profile)
+    os.replace(tmp, CACHE_FILE)
+    print(f"{GR}✓{RS} Profile: {OR}{BD}{args.profile}{RS}  {DM}(applied instantly){RS}")
 
 
 def cmd_config(args):
@@ -108,7 +213,7 @@ def cmd_config(args):
         or os.environ.get("VISUAL")
         or "nano"
     )
-    os.execvp(editor, [editor, CONFIG_PATH])
+    subprocess.run([editor, CONFIG_PATH])
 
 
 def cmd_reload(args):
@@ -165,25 +270,23 @@ def cmd_detect(args):
     }
 
     _header("Ratbagd devices")
-    result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
-    if result.returncode != 0 or not result.stdout.strip():
-        print(f"  {RD}No devices found. Is ratbagd running?{RS}")
-        print(f"  Try: {OR}sudo systemctl start ratbagd{RS}")
-    else:
-        devices = []
+
+    import re as _re
+
+    def _gather_ratbag():
+        data = {"error": None, "devices": []}
+        result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            data["error"] = "nodev"
+            return data
         for line in result.stdout.strip().splitlines():
             line = line.strip()
             if not line:
                 continue
             name = line.split(":", 1)[1].strip() if ":" in line else line
-            if name:
-                devices.append(name)
-                print(f"  {BD}{name}{RS}")
-        print()
-
-        import re as _re
-        for name in devices:
-            print(f"  {OR}{BD}Button indices{RS} {DM}for {name!r}{RS}")
+            if not name:
+                continue
+            dev = {"name": name, "count_error": False, "buttons": []}
             count_r = subprocess.run(
                 ["ratbagctl", name, "profile", "0", "button", "count"],
                 capture_output=True, text=True,
@@ -191,15 +294,35 @@ def cmd_detect(args):
             try:
                 count = int(count_r.stdout.strip())
             except ValueError:
-                print(f"    {RD}(could not read button count){RS}")
-                print()
+                dev["count_error"] = True
+                data["devices"].append(dev)
                 continue
             for i in range(count):
                 br = subprocess.run(
                     ["ratbagctl", name, "profile", "0", "button", str(i), "action", "get"],
                     capture_output=True, text=True,
                 )
-                line = br.stdout.strip()
+                dev["buttons"].append((i, br.stdout.strip()))
+            data["devices"].append(dev)
+        return data
+
+    with Spinner("Scanning ratbagd devices"):
+        data = _gather_ratbag()
+
+    if data["error"] == "nodev":
+        print(f"  {RD}No devices found. Is ratbagd running?{RS}")
+        print(f"  Try: {OR}sudo systemctl start ratbagd{RS}")
+    else:
+        for dev in data["devices"]:
+            print(f"  {BD}{dev['name']}{RS}")
+        print()
+        for dev in data["devices"]:
+            print(f"  {OR}{BD}Button indices{RS} {DM}for {dev['name']!r}{RS}")
+            if dev["count_error"]:
+                print(f"    {RD}(could not read button count){RS}")
+                print()
+                continue
+            for i, line in dev["buttons"]:
                 if not line:
                     continue
                 m = _re.search(r"'button (\d+)'", line)
@@ -253,17 +376,878 @@ def cmd_detect(args):
     print()
 
 
+class _NS:
+    """Tiny namespace so menu actions can fake argparse args."""
+    def __init__(self, **kw): self.__dict__.update(kw)
+
+
+# Interactive menu entries: (label, description, callable taking an args object).
+_MENU = [
+    ("status", "Current profile and daemon status", cmd_status),
+    ("list",   "Profiles, app mappings and shortcuts", cmd_list),
+    ("detect", "Detect device info and button indices", lambda a: cmd_detect(_NS(window=False))),
+    ("reload", "Restart the modifier daemon", cmd_reload),
+    ("config", "Edit profiles, app mappings and device", lambda a: cmd_config_menu(a)),
+]
+
+
+def _read_key():
+    """Read a single keypress; map arrows to 'up'/'down', else return the char."""
+    import termios, tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":  # escape sequence (arrow keys) or bare Esc
+            seq = sys.stdin.read(2)
+            return {"[A": "up", "[B": "down"}.get(seq, "esc")
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+# ── Interactive configuration editor (CRUD over config.toml) ─────────────────
+
+def _tomlkit():
+    try:
+        import tomlkit
+        return tomlkit
+    except ImportError:
+        return None
+
+
+def _require_tomlkit():
+    if _tomlkit() is None:
+        print(f"\n  {RD}Editing needs the 'tomlkit' package (not installed).{RS}")
+        print(f"  Install it with:  {OR}sudo pacman -S python-tomlkit{RS}")
+        print(f"  {DM}(it lets musfocus rewrite config.toml without losing your comments){RS}")
+        _pause()
+        return False
+    return True
+
+
+def _load_doc():
+    with open(CONFIG_PATH) as f:
+        return _tomlkit().parse(f.read())
+
+
+def _save_doc(doc):
+    with open(CONFIG_PATH, "w") as f:
+        f.write(_tomlkit().dumps(doc))
+
+
+def _pause(msg="press any key to continue"):
+    print(f"\n{DM}  ── {msg} ──{RS}", end="", flush=True)
+    _read_key()
+
+
+def _ask(prompt, default=""):
+    """Cooked-mode single-line input. Returns text (or the default), None if aborted."""
+    sys.stdout.write(f"\n  {OR}{prompt}{RS}")
+    if default:
+        sys.stdout.write(f" {DM}[{default}]{RS}")
+    sys.stdout.write(f"\n  {OR}›{RS} ")
+    sys.stdout.flush()
+    try:
+        s = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return s if s else default
+
+
+def _confirm(prompt, default=True):
+    hint = "Y/n" if default else "y/N"
+    r = _ask(f"{prompt} ({hint})", "")
+    if r is None:
+        return False
+    r = r.lower()
+    if r == "":
+        return default
+    return r in ("y", "yes", "s", "si", "sí")
+
+
+def _select(title, labels, footer="↑↓ move · enter select · q back", intro=None):
+    """Generic arrow-key selector over `labels`. Returns the chosen index, or None.
+
+    `intro` is an optional list of dim help lines shown under the title.
+    """
+    if not (_TTY and sys.stdin.isatty()):
+        return None
+    idx = 0
+    while True:
+        print("\033[2J\033[H", end="")
+        print_banner()
+        if title:
+            _header(title)
+        if intro:
+            for line in intro:
+                print(f"  {DM}{line}{RS}")
+            print()
+        for i, label in enumerate(labels):
+            if i == idx:
+                print(f"  {OR}{BD}›{RS} {label}")
+            else:
+                print(f"    {label}")
+        print(f"\n  {DM}{footer}{RS}")
+        key = _read_key()
+        if key in ("q", "Q", "esc", "\x03"):
+            return None
+        elif key == "up":
+            idx = (idx - 1) % len(labels)
+        elif key == "down":
+            idx = (idx + 1) % len(labels)
+        elif key in ("\r", "\n"):
+            return idx
+        elif key.isdigit() and 1 <= int(key) <= min(9, len(labels)):
+            return int(key) - 1
+
+
+def _offer_reload():
+    if _confirm("Reload the modifier daemon now to apply changes?", default=True):
+        cmd_reload(_NS())
+        _pause()
+
+
+def _action_summary(action):
+    """Human-friendly one-liner for a button action string."""
+    if action == "button:6":
+        return f"{OR}modifier trigger{RS} {DM}(button:6){RS}"
+    if action.startswith("button:"):
+        return f"{OR}mouse button{RS} {DM}({action}){RS}"
+    if action.startswith("key:"):
+        return f"{OR}macro{RS} {DM}({action[4:]}){RS}"
+    return action
+
+
+def _capture_combo(timeout=10):
+    """Grab the keyboard briefly and return a pressed combo like 'Ctrl+C'.
+
+    The grab keeps the keystrokes from reaching the terminal (so Ctrl+C won't
+    abort musfocus). Returns the combo string, or None if cancelled/timed out.
+    """
+    try:
+        import evdev
+        from evdev import ecodes as e
+    except ImportError:
+        return None
+    import select as _sel, time
+
+    MODS = {
+        e.KEY_LEFTCTRL: "Ctrl", e.KEY_RIGHTCTRL: "Ctrl",
+        e.KEY_LEFTSHIFT: "Shift", e.KEY_RIGHTSHIFT: "Shift",
+        e.KEY_LEFTALT: "Alt", e.KEY_RIGHTALT: "Alt",
+        e.KEY_LEFTMETA: "Super", e.KEY_RIGHTMETA: "Super",
+    }
+    MOD_ORDER = ["Ctrl", "Shift", "Alt", "Super"]
+    code2name = {}
+    for ch in "abcdefghijklmnopqrstuvwxyz0123456789":
+        code2name[getattr(e, f"KEY_{ch.upper()}")] = ch.upper()
+    for n in range(1, 13):
+        code2name[getattr(e, f"KEY_F{n}")] = f"F{n}"
+    code2name.update({
+        e.KEY_BACKSPACE: "Backspace", e.KEY_TAB: "Tab", e.KEY_ENTER: "Enter",
+        e.KEY_SPACE: "Space", e.KEY_DELETE: "Delete", e.KEY_INSERT: "Insert",
+        e.KEY_HOME: "Home", e.KEY_END: "End", e.KEY_PAGEUP: "PageUp",
+        e.KEY_PAGEDOWN: "PageDown", e.KEY_UP: "Up", e.KEY_DOWN: "Down",
+        e.KEY_LEFT: "Left", e.KEY_RIGHT: "Right",
+    })
+
+    # Skip the configured mouse so we only grab real keyboards.
+    skip = set()
+    try:
+        cfg = load_config().get("device", {})
+        skip.add((int(cfg.get("vendor", "0"), 16), int(cfg.get("product", "0"), 16)))
+    except Exception:
+        pass
+
+    devs = []
+    for path in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(path)
+            caps = d.capabilities().get(e.EV_KEY, [])
+            is_kbd = all(c in caps for c in (e.KEY_A, e.KEY_Z, e.KEY_SPACE, e.KEY_ENTER))
+            if is_kbd and (d.info.vendor, d.info.product) not in skip:
+                devs.append(d)
+            else:
+                d.close()
+        except Exception:
+            pass
+    if not devs:
+        print(f"\n  {RD}No readable keyboard found — type it instead.{RS}")
+        return None
+
+    for d in devs:
+        try:
+            d.grab()
+        except Exception:
+            pass
+
+    if _TTY:
+        sys.stdout.write("\033[?25l")
+    print(f"\n  {YL}{BD}Press your shortcut now{RS} {DM}(Esc to cancel)...{RS}")
+
+    held, result, fds = set(), None, {d.fd: d for d in devs}
+    end = time.time() + timeout
+    try:
+        while time.time() < end and result is None:
+            r, _, _ = _sel.select(list(fds), [], [], end - time.time())
+            if not r:
+                break
+            for fd in r:
+                for ev in fds[fd].read():
+                    if ev.type != e.EV_KEY:
+                        continue
+                    code, val = ev.code, ev.value
+                    if code == e.KEY_ESC and val == 1:
+                        result = "__cancel__"
+                        break
+                    if val == 1 and code in MODS:
+                        held.add(MODS[code])
+                    elif val == 0 and code in MODS:
+                        held.discard(MODS[code])
+                    elif val == 1 and code in code2name:
+                        mods = [m for m in MOD_ORDER if m in held]
+                        result = "+".join(mods + [code2name[code]])
+                        break
+                    # live preview of currently held modifiers
+                    live = " + ".join(m for m in MOD_ORDER if m in held)
+                    sys.stdout.write(f"\r  {DM}holding:{RS} {OR}{live or '—'}{RS}\033[K")
+                    sys.stdout.flush()
+                if result is not None:
+                    break
+    finally:
+        for d in devs:
+            try:
+                d.ungrab()
+            except Exception:
+                pass
+            d.close()
+        if _TTY:
+            sys.stdout.write("\r\033[K\033[?25h")
+            sys.stdout.flush()
+
+    if result in (None, "__cancel__"):
+        return None
+    return result
+
+
+def _get_combo():
+    """Capture or type a key combo. Returns a bare combo like 'Ctrl+C', or None."""
+    how = _select("Keyboard shortcut", [
+        "⌨ Press the keys now  (capture)",
+        "✎ Type it manually    (e.g. Ctrl+Shift+B)",
+    ], intro=["Capture lets you just press the real shortcut."])
+    if how is None:
+        return None
+    if how == 0:
+        combo = _capture_combo()
+        if combo:
+            print(f"\n  {GR}✓{RS} Captured: {OR}{BD}{combo}{RS}")
+            if _confirm("Use this combo?", default=True):
+                return combo
+            return None
+        print(f"\n  {DM}Nothing captured — type it instead.{RS}")
+    c = _ask("Key combo  (e.g. Ctrl+C, Ctrl+Shift+B, Backspace)")
+    return c or None
+
+
+_MOUSE_FUNCS = [
+    ("Left click",   "button:1"),
+    ("Right click",  "button:2"),
+    ("Middle click", "button:3"),
+    ("Back",         "button:4"),
+    ("Forward",      "button:5"),
+]
+
+
+def _choose_mouse_button():
+    pick = _select("Which mouse function?", [f"{OR}{lbl}{RS}" for lbl, _ in _MOUSE_FUNCS],
+                   intro=["Make this button act as a normal mouse button."])
+    return _MOUSE_FUNCS[pick][1] if pick is not None else None
+
+
+def _choose_action():
+    """Action picker. Returns an action string, '' to remove, or None to cancel."""
+    opt = _select("What should this button do?", [
+        f"{OR}Mouse button{RS}    {DM}left, right, middle, back, forward{RS}",
+        f"{OR}Keyboard macro{RS}  {DM}Ctrl+C, Backspace, ...{RS}",
+        f"{RD}Remove{RS}",
+    ])
+    if opt is None:
+        return None
+    if opt == 0:
+        return _choose_mouse_button()
+    if opt == 1:
+        combo = _get_combo()
+        return f"key:{combo}" if combo else None
+    return ""  # remove
+
+
+# ---- mouse button picker ----
+
+_RATBAG_BTN_NAME = {
+    1: "BTN_LEFT", 2: "BTN_RIGHT", 3: "BTN_MIDDLE", 4: "BTN_SIDE",
+    5: "BTN_EXTRA", 6: "BTN_FORWARD", 7: "BTN_BACK", 8: "BTN_TASK",
+}
+_BTN_FRIENDLY = {
+    "BTN_LEFT":    "Left click (LMB)",
+    "BTN_RIGHT":   "Right click (RMB)",
+    "BTN_MIDDLE":  "Middle click",
+    "BTN_SIDE":    "Side button — back",
+    "BTN_EXTRA":   "Side button — forward",
+    "BTN_FORWARD": "Modifier / DPI button",
+    "BTN_BACK":    "Back",
+    "BTN_TASK":    "Task button",
+}
+
+
+def _button_choices():
+    """Scan the first ratbag device → [(index_str, friendly_description)] or None."""
+    import re as _re
+    result = subprocess.run(["ratbagctl", "list"], capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    first = result.stdout.strip().splitlines()[0]
+    name = first.split(":", 1)[1].strip() if ":" in first else first.strip()
+    count_r = subprocess.run(
+        ["ratbagctl", name, "profile", "0", "button", "count"],
+        capture_output=True, text=True,
+    )
+    try:
+        count = int(count_r.stdout.strip())
+    except ValueError:
+        return None
+    out = []
+    for i in range(count):
+        br = subprocess.run(
+            ["ratbagctl", name, "profile", "0", "button", str(i), "action", "get"],
+            capture_output=True, text=True,
+        )
+        line = br.stdout.strip()
+        m = _re.search(r"'button (\d+)'", line)
+        if m:
+            ev = _RATBAG_BTN_NAME.get(int(m.group(1)), f"button {m.group(1)}")
+            desc = _BTN_FRIENDLY.get(ev, ev)
+        elif "macro" in line.lower():
+            desc = "currently a keyboard shortcut"
+        else:
+            desc = (line.split("'")[-2] if "'" in line else line) or "unmapped"
+        out.append((str(i), desc))
+    return out
+
+
+def _pick_button_index():
+    """Let the user pick a physical mouse button from a labeled list. Returns index str."""
+    with Spinner("Reading your mouse buttons"):
+        choices = _button_choices()
+    if not choices:
+        idx = _ask("Couldn't read the mouse. Type a button index instead")
+        return idx if (idx and idx.isdigit()) else None
+    labels = [f"{OR}[{i}]{RS}  {desc}" for i, desc in choices]
+    pick = _select("Which button?", labels,
+                   intro=["The text shows what each button does now."])
+    if pick is None:
+        return None
+    return choices[pick][0]
+
+
+# ---- profiles ----
+
+def _profiles_screen():
+    while True:
+        doc = _load_doc()
+        profiles = list(doc.get("profile", {}).keys())
+        labels = [f"{OR}{BD}{p}{RS}" for p in profiles] + [f"{GR}+ new profile{RS}"]
+        choice = _select("Profiles", labels,
+                         intro=["A profile = the mouse's behaviour for an app."],
+                         footer="↑↓ · enter edit · q back")
+        if choice is None:
+            return
+        if choice == len(profiles):
+            _new_profile()
+        else:
+            _edit_profile(profiles[choice])
+
+
+def _new_profile():
+    name = _ask("New profile name  (e.g. blender)")
+    if not name:
+        return
+    doc = _load_doc()
+    if doc.get("profile") is None:
+        doc["profile"] = _tomlkit().table()
+    if name in doc["profile"]:
+        print(f"\n  {RD}Profile {name!r} already exists.{RS}")
+        _pause()
+        return name
+    dpi = _ask("DPI for this profile", "400")
+    tbl = {}
+    if dpi and dpi.isdigit():
+        tbl["dpi"] = int(dpi)
+    tbl["5"] = "button:6"  # keep the DPI button as the modifier trigger by default
+    doc["profile"][name] = tbl
+    _save_doc(doc)
+    print(f"\n  {GR}✓{RS} Created {OR}{BD}{name}{RS}. {DM}Set its buttons next.{RS}")
+    _pause()
+    _edit_profile(name)
+    return name
+
+
+def _edit_profile(name):
+    while True:
+        doc = _load_doc()
+        prof = doc.get("profile", {}).get(name)
+        if prof is None:
+            return
+        dpi = prof.get("dpi", "—")
+        l2 = prof.get("layer2")
+        if l2 is None:
+            layer_note = "shared defaults"
+        else:
+            layer_note = f"{len([k for k in l2 if k in _BTN_FRIENDLY])} shortcut(s)"
+        choice = _select(f"Profile · {OR}{name}{RS}", [
+            f"{BD}Buttons{RS}        {DM}what each button does{RS}",
+            f"{BD}Second layer{RS}   {DM}hold + click shortcuts · {layer_note}{RS}",
+            f"{BD}DPI{RS}            {OR}{dpi}{RS}",
+            f"{DM}Rename{RS}",
+            f"{RD}Delete{RS}",
+        ], footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == 0:
+            _buttons_screen(name)
+        elif choice == 1:
+            _layer2_screen(name)
+        elif choice == 2:
+            new = _ask("DPI", str(dpi if dpi != "—" else "400"))
+            if new and new.isdigit():
+                prof["dpi"] = int(new)
+                _save_doc(doc)
+        elif choice == 3:
+            new = _ask("New name", name)
+            if new and new != name:
+                doc["profile"][new] = dict(prof)
+                del doc["profile"][name]
+                _save_doc(doc)
+                name = new
+        elif choice == 4:
+            if _confirm(f"Delete profile {name!r}?", default=False):
+                del doc["profile"][name]
+                _save_doc(doc)
+                return
+
+
+def _buttons_screen(name):
+    while True:
+        doc = _load_doc()
+        prof = doc["profile"][name]
+        btn_keys = [k for k in prof.keys() if k not in ("dpi", "layer2")]
+        labels = [f"{OR}button {k}{RS}  {DM}→{RS}  {_action_summary(str(prof[k]))}"
+                  for k in btn_keys]
+        labels.append(f"{GR}+ set a button{RS}")
+        choice = _select(f"{name} · buttons", labels,
+                         intro=["Pick a button to change what it does."],
+                         footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == len(btn_keys):          # add
+            idx = _pick_button_index()
+            if not idx:
+                continue
+            act = _choose_action()
+            if act in (None, ""):
+                continue
+            prof[idx] = act
+            _save_doc(doc)
+            _offer_reload()
+        else:                                # edit existing
+            k = btn_keys[choice]
+            act = _choose_action()
+            if act is None:
+                continue
+            if act == "":
+                del prof[k]
+            else:
+                prof[k] = act
+            _save_doc(doc)
+            _offer_reload()
+
+
+def _ensure_layer2(doc, name):
+    """Return the profile's own layer2 table, seeding it from shared defaults once."""
+    prof = doc["profile"][name]
+    if prof.get("layer2") is None:
+        tbl = _tomlkit().table()
+        for k, v in doc.get("modifier", {}).items():
+            if k in _BTN_FRIENDLY:
+                tbl[k] = str(v)
+        prof["layer2"] = tbl
+    return prof["layer2"]
+
+
+def _set_trigger(doc, name):
+    print(f"\n  {DM}Pick the button you'll HOLD to reach the second layer.{RS}")
+    _pause("press any key to choose")
+    idx = _pick_button_index()
+    if not idx:
+        return
+    prof = doc["profile"][name]
+    for k in [k for k, v in list(prof.items()) if str(v) == "button:6" and k != idx]:
+        del prof[k]
+    prof[idx] = "button:6"
+    _save_doc(doc)
+    print(f"\n  {GR}✓{RS} Trigger set — hold button {idx} to reach the second layer.")
+    _offer_reload()
+
+
+def _layer2_screen(name):
+    while True:
+        doc = _load_doc()
+        prof = doc["profile"][name]
+        l2 = prof.get("layer2")
+        inherited = l2 is None
+        src = (l2 if not inherited else doc.get("modifier", {}))
+        binds = [(k, str(src[k])) for k in src if k in _BTN_FRIENDLY]
+        trig = next((k for k, v in prof.items() if str(v) == "button:6"), None)
+        trig_lbl = "not set" if trig is None else f"button {trig}"
+        intro = ["Hold the trigger button, then click another button → fires a shortcut."]
+        if inherited:
+            intro.append(f"{YL}Using shared defaults — add one to make this profile's own.{RS}")
+        labels = [f"{DM}trigger{RS}  {OR}{trig_lbl}{RS} {DM}(hold this){RS}"]
+        for k, v in binds:
+            labels.append(f"{_BTN_FRIENDLY.get(k, k):<20} {DM}→{RS}  {OR}{v}{RS}")
+        labels.append(f"{GR}+ add shortcut{RS}")
+        choice = _select(f"{name} · second layer", labels, intro=intro,
+                         footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == 0:
+            _set_trigger(doc, name)
+        elif 1 <= choice <= len(binds):
+            k, v = binds[choice - 1]
+            what = _select(f"{_BTN_FRIENDLY.get(k, k)}  →  {v}",
+                           ["Change shortcut", f"{RD}Remove{RS}"])
+            if what == 0:
+                combo = _get_combo()
+                if combo:
+                    _ensure_layer2(doc, name)[k] = combo
+                    _save_doc(doc)
+                    _offer_reload()
+            elif what == 1:
+                if _confirm(f"Remove {_BTN_FRIENDLY.get(k, k)} → {v}?", default=False):
+                    layer = _ensure_layer2(doc, name)
+                    if k in layer:
+                        del layer[k]
+                    _save_doc(doc)
+                    _offer_reload()
+        elif choice == 1 + len(binds):
+            btn = _pick_btn_name()
+            if not btn:
+                continue
+            print(f"\n  {DM}Set the shortcut for {_BTN_FRIENDLY.get(btn, btn)}.{RS}")
+            combo = _get_combo()
+            if not combo:
+                continue
+            _ensure_layer2(doc, name)[btn] = combo
+            _save_doc(doc)
+            print(f"\n  {GR}✓{RS} {_BTN_FRIENDLY.get(btn, btn)} {DM}→{RS} {OR}{combo}{RS}")
+            _offer_reload()
+
+
+# ---- app mappings ----
+
+def _detect_window_class():
+    """Animated 5s wait, then read the focused window's class. Returns str or None."""
+    import time
+    print("\033[2J\033[H", end="")
+    print_banner()
+    _header("Detect window")
+    print(f"  {DM}Click the app's window before the countdown ends.{RS}")
+    print(f"\n  {YL}{BD}Focus your target window now...{RS}")
+    width, dots = 14, Spinner.DOTS
+    span = 2 * (width - 1)
+    if _TTY:
+        sys.stdout.write("\033[?25l")
+    end, i = time.time() + 5, 0
+    while time.time() < end:
+        remain = end - time.time()
+        dot = dots[i % len(dots)]
+        pos = i % span
+        if pos >= width:
+            pos = span - pos
+        track = "".join((OR + "█" + RS) if j == pos else (DM + "·" + RS) for j in range(width))
+        sys.stdout.write(
+            f"\r  {OR}{BD}{dot}{RS} reading in {YL}{BD}{remain:0.0f}s{RS} "
+            f"{OR2}❮{RS}{track}{OR2}❯{RS} "
+        )
+        sys.stdout.flush()
+        time.sleep(0.07)
+        i += 1
+    if _TTY:
+        sys.stdout.write("\r\033[K\033[?25h")
+    try:
+        with open("/tmp/FocusNotifier/wclass.txt") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+
+def _pick_profile(doc, title="Assign to which profile?"):
+    """Let the user pick an existing profile or create one. Returns name or None."""
+    profs = list(doc.get("profile", {}).keys())
+    pick = _select(title, [f"{OR}{p}{RS}" for p in profs] + [f"{GR}+ new profile{RS}"])
+    if pick is None:
+        return None
+    if pick == len(profs):
+        return _new_profile()
+    return profs[pick]
+
+
+def _apps_screen():
+    while True:
+        doc = _load_doc()
+        apps = doc.get("apps", {})
+        patterns = list(apps.keys())
+        labels = [f"{DM}{p}{RS}  {OR}→ {apps[p]}{RS}" for p in patterns]
+        labels.append(f"{GR}+ new app mapping{RS}")
+        choice = _select("App mappings", labels,
+                         intro=["When an app is focused, load its profile (else 'default')."],
+                         footer="↑↓ · enter · q back")
+        if choice is None:
+            return
+        if choice == len(patterns):
+            _new_app_mapping()
+        else:
+            _edit_app_mapping(patterns[choice])
+
+
+def _new_app_mapping():
+    how = _select("New app mapping  ·  1/3 · find the app", [
+        "⊙ Detect the focused window  (recommended)",
+        "✎ Type the pattern manually",
+    ], intro=["Step 1: identify the app."])
+    if how is None:
+        return
+    wclass = None
+    if how == 0:
+        wclass = _detect_window_class()
+        if wclass is None:
+            print(f"\n  {RD}No window class read{RS} {DM}— type one instead.{RS}")
+            _pause()
+        else:
+            print(f"\n  {GR}✓{RS} Detected: {OR}{BD}{wclass}{RS}")
+            _pause()
+    default_pat = f"*{wclass.lower()}*" if wclass else ""
+    pattern = _ask("2/3 · pattern  (* = wildcard, | = or)", default_pat)
+    if not pattern:
+        return
+    doc = _load_doc()
+    profile = _pick_profile(doc, title="3/3 · which profile?")
+    if profile is None:
+        return
+    doc = _load_doc()  # reload in case a profile was just created
+    if doc.get("apps") is None:
+        doc["apps"] = _tomlkit().table()
+    doc["apps"][pattern] = profile
+    _save_doc(doc)
+    print(f"\n  {GR}✓{RS} {DM}{pattern}{RS} {OR}→ {profile}{RS}")
+    _pause()
+
+
+def _edit_app_mapping(pattern):
+    doc = _load_doc()
+    apps = doc.get("apps", {})
+    choice = _select(f"Mapping: {pattern}", [
+        f"{DM}change pattern{RS}",
+        f"{DM}change profile{RS}  {OR}(now: {apps.get(pattern)}){RS}",
+        f"{RD}delete mapping{RS}",
+    ])
+    if choice is None:
+        return
+    if choice == 0:
+        new = _ask("New pattern", pattern)
+        if new and new != pattern:
+            val = apps[pattern]
+            del doc["apps"][pattern]
+            doc["apps"][new] = val
+            _save_doc(doc)
+    elif choice == 1:
+        profile = _pick_profile(doc, title="Change to which profile?")
+        if profile is not None:
+            doc = _load_doc()
+            doc["apps"][pattern] = profile
+            _save_doc(doc)
+    elif choice == 2:
+        if _confirm(f"Delete mapping {pattern!r}?", default=False):
+            del doc["apps"][pattern]
+            _save_doc(doc)
+
+
+# ---- device ----
+
+def _device_screen():
+    def _list_inputs():
+        out = []
+        try:
+            import evdev as _evdev
+        except ImportError:
+            return out
+        seen = set()
+        for path in _evdev.list_devices():
+            try:
+                d = _evdev.InputDevice(path)
+                if d.info.vendor and d.info.product:
+                    key = (d.info.vendor, d.info.product)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append((format(d.info.vendor, "04x"),
+                                    format(d.info.product, "04x"), d.name))
+                d.close()
+            except Exception:
+                pass
+        return out
+
+    with Spinner("Scanning input devices"):
+        devs = _list_inputs()
+    if not devs:
+        print(f"\n  {RD}No input devices found.{RS}")
+        _pause()
+        return
+    doc = _load_doc()
+    cur = doc.get("device", {})
+    curv, curp = cur.get("vendor"), cur.get("product")
+
+    def looks_like_mouse(n):
+        return "mouse" in n.lower() or any(w in n.lower() for w in ("g305", "g pro", "gaming mouse"))
+
+    labels = []
+    for vid, pid, name in devs:
+        tag = ""
+        if vid == curv and pid == curp:
+            tag = f"{GR}  ✓ current{RS}"
+        elif looks_like_mouse(name):
+            tag = f"{OR2}  · mouse?{RS}"
+        labels.append(f"{OR}{vid}:{pid}{RS}  {name}{tag}")
+    pick = _select("Pick your mouse", labels,
+                   intro=["Pick your MOUSE (not the keyboard). · = likely mouse."])
+    if pick is None:
+        return
+    vid, pid, name = devs[pick]
+    if not looks_like_mouse(name) and not _confirm(
+            f"{name!r} doesn't look like a mouse. Use it anyway?", default=False):
+        return
+    if doc.get("device") is None:
+        doc["device"] = _tomlkit().table()
+    doc["device"]["vendor"] = vid
+    doc["device"]["product"] = pid
+    _save_doc(doc)
+    print(f"\n  {GR}✓{RS} Mouse set to {OR}{name}{RS}")
+    _offer_reload()
+
+
+# evdev buttons that can fire a second-layer shortcut (the trigger itself excluded).
+_MOD_TARGETS = ["BTN_SIDE", "BTN_EXTRA", "BTN_RIGHT", "BTN_MIDDLE", "BTN_BACK", "BTN_LEFT"]
+
+
+def _pick_btn_name(exclude=("BTN_FORWARD",)):
+    """Pick which button fires a second-layer shortcut. Returns a BTN_ name."""
+    names = [n for n in _MOD_TARGETS if n not in exclude]
+    labels = [f"{OR}{_BTN_FRIENDLY.get(n, n)}{RS}" for n in names]
+    pick = _select("Which button fires it?", labels,
+                   intro=["Hold the trigger, then click this button."])
+    return names[pick] if pick is not None else None
+
+
+def cmd_config_menu(args):
+    """Interactive CRUD editor for config.toml, reachable from the main menu."""
+    if not (_TTY and sys.stdin.isatty()):
+        print_banner()
+        cmd_list(args)
+        return
+    while True:
+        choice = _select("Configuration", [
+            f"{BD}Profiles{RS}      {DM}buttons & shortcuts per app{RS}",
+            f"{BD}App mappings{RS}  {DM}which app uses which profile{RS}",
+            f"{BD}Device{RS}        {DM}choose your mouse{RS}",
+            f"{DM}Edit config.toml in your editor{RS}",
+        ], intro=["Changes save automatically."],
+           footer="↑↓ · enter · q back to main menu")
+        if choice is None:
+            return
+        if choice == 3:
+            cmd_config(_NS())
+            continue
+        if not _require_tomlkit():
+            continue
+        if choice == 0:
+            _profiles_screen()
+        elif choice == 1:
+            _apps_screen()
+        elif choice == 2:
+            _device_screen()
+
+
+def _run_menu_item(idx):
+    print("\033[2J\033[H", end="")        # clear screen
+    print_banner()
+    _MENU[idx][2](_NS())
+    print(f"\n{DM}  ── press any key to return to the menu ──{RS}", end="", flush=True)
+    _read_key()
+
+
+def cmd_menu(args):
+    """Interactive arrow-key menu shown when musfocus is run with no command."""
+    if not (_TTY and sys.stdin.isatty()):
+        print_banner()
+        cmd_status(args)
+        return
+
+    idx = 0
+    while True:
+        print("\033[2J\033[H", end="")    # clear screen + home
+        print_banner()
+        print()
+        for i, (name, desc, _) in enumerate(_MENU):
+            num = f"{OR2}{i + 1}{RS}"
+            if i == idx:
+                print(f"  {OR}{BD}›{RS} {num}  {OR}{BD}{name:<8}{RS} {DM}{desc}{RS}")
+            else:
+                print(f"    {num}  {name:<8} {DM}{desc}{RS}")
+        print(f"\n  {DM}↑↓ move · enter select · 1-{len(_MENU)} jump · q quit{RS}")
+
+        try:
+            key = _read_key()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if key in ("q", "Q", "esc", "\x03"):
+            break
+        elif key == "up":
+            idx = (idx - 1) % len(_MENU)
+        elif key == "down":
+            idx = (idx + 1) % len(_MENU)
+        elif key in ("\r", "\n"):
+            _run_menu_item(idx)
+        elif key.isdigit() and 1 <= int(key) <= len(_MENU):
+            idx = int(key) - 1
+            _run_menu_item(idx)
+
+    print("\033[2J\033[H", end="")
+    print(f"{OR}musfocus{RS} {DM}— bye{RS}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="musfocus",
         description="Per-app mouse profile switcher for any ratbagd-supported mouse.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="Show current profile and service status")
     sub.add_parser("list",   help="List all profiles, app mappings, and shortcuts")
     sub.add_parser("config", help="Open config.toml in your editor ($EDITOR or nano)")
     sub.add_parser("reload", help="Restart the modifier daemon and clear profile cache")
+    sub.add_parser("menu",   help="Open the interactive menu (default with no command)")
 
     p_apply = sub.add_parser("apply", help="Apply a profile manually")
     p_apply.add_argument("profile", help="Profile name from config.toml")
@@ -275,6 +1259,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # No command → interactive menu. The menu draws its own banner per redraw.
+    if args.command in (None, "menu"):
+        cmd_menu(args)
+        return
+
+    # Every other command leads with the banner.
+    print_banner()
     {
         "status": cmd_status,
         "list":   cmd_list,

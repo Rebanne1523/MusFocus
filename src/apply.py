@@ -110,60 +110,64 @@ def set_dpi(bus, hidraw, dpi):
             return
 
 
-def apply_profile(name, config):
-    profiles = config.get("profile", {})
-    profile = profiles.get(name)
-    if profile is None:
-        print(f"Unknown profile: {name!r}", file=sys.stderr)
-        print(f"Available: {', '.join(profiles)}", file=sys.stderr)
-        sys.exit(1)
-
-    bus = dbus.SystemBus()
+def get_hidraw(bus):
+    """Return the first ratbagd device id (e.g. 'hidraw0'), or None."""
     mgr = dbus.Interface(
         bus.get_object("org.freedesktop.ratbag1", "/org/freedesktop/ratbag1"),
         "org.freedesktop.DBus.Properties",
     )
     devices = mgr.Get("org.freedesktop.ratbag1.Manager", "Devices")
     if not devices:
+        return None
+    return str(devices[0]).split("/")[-1]
+
+
+def set_base(bus, hidraw):
+    """Map every physical button index i to logical button (i+1).
+
+    This fixed 'identity' base lets the daemon tell which physical button was
+    pressed; all per-app remapping then happens in software in the daemon.
+    """
+    profile_obj = bus.get_object(
+        "org.freedesktop.ratbag1", f"/org/freedesktop/ratbag1/profile/{hidraw}/p0"
+    )
+    pprops = dbus.Interface(profile_obj, "org.freedesktop.DBus.Properties")
+    buttons = pprops.Get("org.freedesktop.ratbag1.Profile", "Buttons")
+    for i in range(len(buttons)):
+        obj = bus.get_object(
+            "org.freedesktop.ratbag1",
+            f"/org/freedesktop/ratbag1/button/{hidraw}/p0/b{i}",
+        )
+        props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
+        props.Set("org.freedesktop.ratbag1.Button", "Mapping", button_mapping(i + 1))
+
+
+def commit(bus, hidraw):
+    """Synchronously flush pending changes to the device firmware."""
+    dev = dbus.Interface(
+        bus.get_object("org.freedesktop.ratbag1", f"/org/freedesktop/ratbag1/device/{hidraw}"),
+        "org.freedesktop.ratbag1.Device",
+    )
+    dev.Commit()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    bus = dbus.SystemBus()
+    hidraw = get_hidraw(bus)
+    if hidraw is None:
         print("No ratbagd devices found.", file=sys.stderr)
         sys.exit(0)
 
-    hidraw = str(devices[0]).split("/")[-1]
-
-    for btn_idx_str, action_str in profile.items():
-        if btn_idx_str == "dpi":
-            continue
-        btn_idx = int(btn_idx_str)
-        kind, data = parse_action(action_str)
-        obj = bus.get_object(
-            "org.freedesktop.ratbag1",
-            f"/org/freedesktop/ratbag1/button/{hidraw}/p0/b{btn_idx}",
-        )
-        props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
-        mapping = button_mapping(data) if kind == "button" else macro_mapping(data)
-        props.Set("org.freedesktop.ratbag1.Button", "Mapping", mapping)
-
-    if "dpi" in profile:
-        set_dpi(bus, hidraw, int(profile["dpi"]))
-
-    dev_path = f"/org/freedesktop/ratbag1/device/{hidraw}"
-    commit_cmd = (
-        f"import dbus; bus=dbus.SystemBus(); "
-        f"dbus.Interface(bus.get_object('org.freedesktop.ratbag1','{dev_path}'),"
-        f"'org.freedesktop.ratbag1.Device').Commit()"
-    )
-    subprocess.Popen(
-        [sys.executable, "-c", commit_cmd],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    if cmd == "base":
+        set_base(bus, hidraw)
+    elif cmd == "dpi" and len(sys.argv) >= 3:
+        set_dpi(bus, hidraw, int(sys.argv[2]))
+    else:
+        print(f"Usage: {sys.argv[0]} base | dpi <N>", file=sys.stderr)
+        sys.exit(1)
+    commit(bus, hidraw)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <profile>", file=sys.stderr)
-        sys.exit(1)
-    with open(CONFIG_PATH, "rb") as f:
-        config = tomllib.load(f)
-    apply_profile(sys.argv[1], config)
+    main()

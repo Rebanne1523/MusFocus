@@ -29,6 +29,20 @@ if [ -n "$MISSING" ]; then
     exit 1
 fi
 
+# 0b. Optional: tomlkit powers the interactive config editor (musfocus menu).
+#     Not required for the daemon — warn but don't block.
+if ! python3 -c "import tomlkit" 2>/dev/null; then
+    echo "[i] Optional: install 'python-tomlkit' to edit profiles from the menu"
+    if command -v pacman &>/dev/null; then
+        echo "    Run: sudo pacman -S python-tomlkit"
+    elif command -v apt-get &>/dev/null; then
+        echo "    Run: sudo apt-get install python3-tomlkit"
+    elif command -v dnf &>/dev/null; then
+        echo "    Run: sudo dnf install python3-tomlkit"
+    fi
+    echo
+fi
+
 # 1. Config
 if [ ! -f "$SCRIPT_DIR/config.toml" ]; then
     cp "$SCRIPT_DIR/config.toml.example" "$SCRIPT_DIR/config.toml"
@@ -129,5 +143,5 @@ echo "[+] Modifier daemon enabled and running"
 
 echo
 echo "=== Done ==="
-echo "  Edit $SCRIPT_DIR/config.toml to add profiles and app mappings."
-echo "  Run 'musfocus --help' for available commands."
+echo "  Run 'musfocus' for the interactive menu (profiles, app mappings, device)."
+echo "  Or edit $SCRIPT_DIR/config.toml directly. 'musfocus --help' lists commands."
